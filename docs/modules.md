@@ -154,14 +154,70 @@ pytest -s -m lcm dimos/
 
 # Unitree Go2 Quickstart
 
-To quickly test the modules system, you can run the Unitree Go2 multiprocess example directly:
+The DimOS modules system provides two main run configurations for the Unitree Go2 robot:
+
+## Run Configurations
+
+### 1. Light Robot (CPU-only)
 
 ```bash
-# Make sure you have the required environment variables set
+# Set robot IP (or use 127.0.0.1 for simulated mode)
 export ROBOT_IP=<your_robot_ip>
 
-# Run the multiprocess Unitree Go2 example
-python dimos/robot/unitree_webrtc/multiprocess/unitree_go2.py
+# Run with real robot
+python dimos/robot/unitree_webrtc/multiprocess/run_light_robot.py --webrtc
+
+# Run in simulated mode (uses recorded data)
+python dimos/robot/unitree_webrtc/multiprocess/run_light_robot.py --simulated
 ```
+
+Features:
+- Robot exploration and navigation
+- Video streaming  
+- YOLO-powered object detection
+- Web interface with agent at http://localhost:5555
+- Voice control
+
+### 2. GPU Robot (Full perception stack)
+
+```bash
+# Requires CUDA installation (pip install .[cuda])
+export ROBOT_IP=<your_robot_ip>
+
+# Run with real robot
+python dimos/robot/unitree_webrtc/multiprocess/run_gpu_robot.py --webrtc
+
+# Run in simulated mode
+python dimos/robot/unitree_webrtc/multiprocess/run_gpu_robot.py --simulated
+```
+
+Features:
+- All Light Robot features plus:
+- Detic-powered object detection (falls back to YOLO if unavailable)
+- Person and object tracking
+- Spatial memory with CLIP-based semantic embeddings
+- Metric3D depth estimation
+
+## Foxglove Visualization
+
+To visualize robot data streams in real-time:
+
+1. **Open Foxglove Studio**:
+   - Download from https://foxglove.dev/
+   - Connect to `ws://localhost:8765`
+   - Available topics:
+     - `/lidar` - LiDAR point cloud data
+     - `/odom` - Robot odometry  
+     - `/video` - Camera video feed
+     - `/global_map` - Accumulated point cloud map
+     - `/global_path` - Planned navigation path
+     - `/person_tracking` - Person detection results
+     - `/object_tracking` - Object detection results
+
+2. **Recommended Layout**:
+   - 3D panel: Display `/lidar` and `/global_map` point clouds
+   - Image panel: Show `/video` stream
+   - Plot panel: Track `/odom` position over time
+   - Log panel: Monitor system messages
 
 

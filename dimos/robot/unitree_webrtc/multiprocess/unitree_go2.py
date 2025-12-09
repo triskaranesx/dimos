@@ -20,7 +20,7 @@ import os
 import threading
 import time
 import warnings
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from reactivex import Observable
 from reactivex import operators as ops
@@ -42,7 +42,10 @@ from dimos.robot.unitree_webrtc.connection import UnitreeWebRTCConnection, Video
 from dimos.robot.unitree_webrtc.type.lidar import LidarMessage
 from dimos.robot.unitree_webrtc.type.map import Map
 from dimos.robot.unitree_webrtc.type.odometry import Odometry
+from dimos.robot.unitree_webrtc.unitree_skills import MyUnitreeSkills
+from dimos.skills.skills import AbstractRobotSkill, SkillLibrary
 from dimos.types.costmap import Costmap
+from dimos.types.robot_capabilities import RobotCapability
 from dimos.types.vector import Vector
 from dimos.utils.data import get_data
 from dimos.utils.logging_config import setup_logger
@@ -188,6 +191,8 @@ class UnitreeGo2Light:
         ip: str,
         output_dir: str = os.path.join(os.getcwd(), "assets", "output"),
         simulated: bool = False,
+        skill_library: Optional[SkillLibrary] = None,
+        robot_capabilities: Optional[List[RobotCapability]] = None,
     ):
         self.output_dir = output_dir
         self.ip = ip
@@ -200,6 +205,17 @@ class UnitreeGo2Light:
         self.frontier_explorer = None
         self.foxglove_bridge = None
         self.ctrl = None
+
+        # Initialize skill library
+        if skill_library is None:
+            skill_library = MyUnitreeSkills()
+        self.skill_library = skill_library
+
+        # Initialize capabilities
+        self.capabilities = robot_capabilities or [
+            RobotCapability.LOCOMOTION,
+            RobotCapability.VISION,
+        ]
 
     async def start(self):
         self.dimos = core.start(4)
@@ -301,6 +317,17 @@ class UnitreeGo2Light:
         await asyncio.sleep(2)
         print("querying system")
         print(self.mapper.costmap())
+
+        # Initialize skills
+        if self.skill_library is not None:
+            for skill in self.skill_library:
+                if isinstance(skill, AbstractRobotSkill):
+                    self.skill_library.create_instance(skill.__name__, robot=self)
+            if isinstance(self.skill_library, MyUnitreeSkills):
+                self.skill_library._robot = self
+                self.skill_library.init()
+                self.skill_library.initialize_skills()
+
         logger.info("UnitreeGo2Light initialized and started")
 
     def get_pose(self) -> dict:
@@ -351,13 +378,11 @@ class UnitreeGo2Light:
 
     def standup(self):
         """Make the robot stand up."""
-        if self.connection and hasattr(self.connection, "standup"):
-            return self.connection.standup()
+        return self.connection.standup()
 
     def liedown(self):
         """Make the robot lie down."""
-        if self.connection and hasattr(self.connection, "liedown"):
-            return self.connection.liedown()
+        return self.connection.liedown()
 
     @property
     def costmap(self):
@@ -365,6 +390,25 @@ class UnitreeGo2Light:
         if not self.mapper:
             raise RuntimeError("Mapper not initialized. Call start() first.")
         return self.mapper.costmap
+
+    def get_skills(self):
+        """Get the robot's skill library.
+
+        Returns:
+            The robot's skill library for adding/managing skills
+        """
+        return self.skill_library
+
+    def has_capability(self, capability: RobotCapability) -> bool:
+        """Check if the robot has a specific capability.
+
+        Args:
+            capability: The capability to check for
+
+        Returns:
+            bool: True if the robot has the capability
+        """
+        return capability in self.capabilities
 
     def get_video_stream(self, fps: int = 30) -> Observable:
         """Get the video stream with rate limiting and processing.

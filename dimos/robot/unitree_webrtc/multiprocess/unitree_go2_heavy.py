@@ -29,8 +29,7 @@ from dimos.perception.object_tracker import ObjectTrackingStream
 from dimos.perception.person_tracker import PersonTrackingStream
 from dimos.perception.spatial_perception import SpatialMemory
 from dimos.robot.unitree_webrtc.multiprocess.unitree_go2 import UnitreeGo2Light
-from dimos.robot.unitree_webrtc.unitree_skills import MyUnitreeSkills
-from dimos.skills.skills import AbstractRobotSkill, SkillLibrary
+from dimos.skills.skills import SkillLibrary
 from dimos.types.robot_capabilities import RobotCapability
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.threadpool import get_scheduler
@@ -53,6 +52,7 @@ class UnitreeGo2Heavy(UnitreeGo2Light):
         self,
         ip: str,
         output_dir: str = None,
+        simulated: bool = False,
         skill_library: Optional[SkillLibrary] = None,
         robot_capabilities: Optional[List[RobotCapability]] = None,
         spatial_memory_collection: str = "spatial_memory",
@@ -65,6 +65,7 @@ class UnitreeGo2Heavy(UnitreeGo2Light):
         Args:
             ip: IP address of the robot
             output_dir: Directory for output files
+            simulated: Whether to use simulated robot with FakeRTC
             skill_library: Skill library instance
             robot_capabilities: List of robot capabilities
             spatial_memory_collection: Collection name for spatial memory
@@ -72,33 +73,34 @@ class UnitreeGo2Heavy(UnitreeGo2Light):
             enable_perception: Whether to enable perception streams
             pool_scheduler: Thread pool scheduler for async operations
         """
-        super().__init__(ip)
-
         # Set output directory
         if output_dir is None:
             output_dir = os.path.join(os.getcwd(), "assets", "output")
-        self.output_dir = output_dir
+
+        # Override capabilities if not provided - Heavy version has audio too
+        if robot_capabilities is None:
+            robot_capabilities = [
+                RobotCapability.LOCOMOTION,
+                RobotCapability.VISION,
+                RobotCapability.AUDIO,
+            ]
+
+        super().__init__(
+            ip=ip,
+            output_dir=output_dir,
+            simulated=simulated,
+            skill_library=skill_library,
+            robot_capabilities=robot_capabilities,
+        )
 
         self.enable_perception = enable_perception
         self.disposables = CompositeDisposable()
         self.pool_scheduler = pool_scheduler if pool_scheduler else get_scheduler()
 
-        # Initialize capabilities
-        self.capabilities = robot_capabilities or [
-            RobotCapability.LOCOMOTION,
-            RobotCapability.VISION,
-            RobotCapability.AUDIO,
-        ]
-
         # Camera configuration for Unitree Go2
         self.camera_intrinsics = [819.553492, 820.646595, 625.284099, 336.808987]
         self.camera_pitch = np.deg2rad(0)  # negative for downward pitch
         self.camera_height = 0.44  # meters
-
-        # Initialize skill library
-        if skill_library is None:
-            skill_library = MyUnitreeSkills()
-        self.skill_library = skill_library
 
         # Initialize spatial memory module (will be deployed after connection is established)
         self._video_stream = None
@@ -222,15 +224,6 @@ class UnitreeGo2Heavy(UnitreeGo2Light):
         else:
             logger.info("Perception disabled or video stream unavailable")
 
-        if self.skill_library is not None:
-            for skill in self.skill_library:
-                if isinstance(skill, AbstractRobotSkill):
-                    self.skill_library.create_instance(skill.__name__, robot=self)
-            if isinstance(self.skill_library, MyUnitreeSkills):
-                self.skill_library._robot = self
-                self.skill_library.init()
-                self.skill_library.initialize_skills()
-
         logger.info("UnitreeGo2Heavy initialized with all modules")
 
     @property
@@ -241,25 +234,6 @@ class UnitreeGo2Heavy(UnitreeGo2Light):
             Observable video stream or None if not available
         """
         return self._video_stream
-
-    def get_skills(self):
-        """Get the robot's skill library.
-
-        Returns:
-            The robot's skill library for adding/managing skills
-        """
-        return self.skill_library
-
-    def has_capability(self, capability: RobotCapability) -> bool:
-        """Check if the robot has a specific capability.
-
-        Args:
-            capability: The capability to check for
-
-        Returns:
-            bool: True if the robot has the capability
-        """
-        return capability in self.capabilities
 
     @property
     def spatial_memory(self) -> Optional[SpatialMemory]:

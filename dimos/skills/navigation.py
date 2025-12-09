@@ -34,7 +34,7 @@ from dimos.types.robot_location import RobotLocation
 from dimos.utils.logging_config import setup_logger
 from dimos.models.qwen.video_query import get_bbox_from_qwen_frame
 from dimos.utils.transform_utils import distance_angle_to_goal_xy
-from dimos.robot.local_planner.local_planner import navigate_to_goal_local
+# from dimos.robot.local_planner.local_planner import navigate_to_goal_local
 
 logger = setup_logger("dimos.skills.semantic_map_skills")
 
