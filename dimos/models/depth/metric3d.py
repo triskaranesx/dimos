@@ -46,9 +46,9 @@ class Metric3D:
             "device_id": 0,
 
             # Memory/tactics
-            "trt_max_workspace_size": 512 * 1024**2,        # 512MB
-            "trt_builder_optimization_level": 5,            # 0..5, higher = more aggressive build/tactics
-            "trt_auxiliary_streams": 2,                     # small benefit on some nets; keep modest on Nano
+            "trt_max_workspace_size": 600 * 1024**2,        # 512MB
+            "trt_builder_optimization_level": 4,            # 0..5, higher = more aggressive build/tactics
+            "trt_auxiliary_streams": 1,                     # small benefit on some nets; keep modest on Nano
 
             # Precision
             "trt_fp16_enable": True,                        # Nano lacks tensor cores but can still benefit from FP16 in some ops
@@ -123,7 +123,7 @@ class Metric3D:
         self.session = ort.InferenceSession(onnx_model_path, providers=providers)
         if self.contains_io_binding:
             io = self.session.io_binding()
-            io.bind_output(name="out", device_type="cuda", device_id=0)  # keep output on GPU
+            io.bind_output(name="pred_depth", device_type="cuda", device_id=0)  # keep output on GPU
             self.io_binding = io
         
     """
