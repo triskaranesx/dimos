@@ -380,10 +380,10 @@ class UnitreeG1(Robot, Resource):
         # Deploy Foxglove bridge
         self.foxglove_bridge = FoxgloveBridge(
             shm_channels=[
-                "/zed/color_image#sensor_msgs.Image",
-                "/zed/depth_image#sensor_msgs.Image",
+                "/image#sensor_msgs.Image",
             ]
         )
+
         self.foxglove_bridge.start()
 
     def _deploy_perception(self):

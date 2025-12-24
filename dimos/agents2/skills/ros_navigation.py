@@ -13,15 +13,14 @@
 # limitations under the License.
 
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+from dimos.core.resource import Resource
 from dimos.msgs.geometry_msgs import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.protocol.skill.skill import SkillContainer, skill
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import euler_to_quaternion
-from dimos.core.resource import Resource
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dimos.robot.unitree_webrtc.unitree_g1 import UnitreeG1
@@ -55,7 +54,7 @@ class RosNavigation(SkillContainer, Resource):
             query: Text query to search for in the semantic map
         """
 
-        print("X" * 10000)
+        # print("X" * 10000)
 
         if not self._started:
             raise ValueError(f"{self} has not been started.")

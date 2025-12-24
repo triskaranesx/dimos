@@ -24,13 +24,13 @@ from dimos.models.vl.qwen import QwenVlModel
 from dimos.msgs.geometry_msgs import PoseStamped
 from dimos.msgs.geometry_msgs.Vector3 import make_vector3
 from dimos.msgs.sensor_msgs import Image
+from dimos.navigation.bt_navigator.navigator import NavigatorState
 from dimos.navigation.visual.query import get_object_bbox_from_image
 from dimos.protocol.skill.skill import SkillContainer, skill
 from dimos.robot.robot import UnitreeRobot
 from dimos.types.robot_location import RobotLocation
 from dimos.utils.logging_config import setup_logger
 from dimos.utils.transform_utils import euler_to_quaternion, quaternion_to_euler
-from dimos.navigation.bt_navigator.navigator import NavigatorState
 
 logger = setup_logger(__file__)
 
