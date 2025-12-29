@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from datetime import datetime
 import inspect
 import logging
 import logging.handlers
@@ -20,7 +19,9 @@ import os
 from pathlib import Path
 import sys
 import traceback
-from typing import Any, Mapping
+import tempfile
+from datetime import datetime
+from typing import Any, Mapping, Optional
 
 import structlog
 from structlog.processors import CallsiteParameter, CallsiteParameterAdder
@@ -34,17 +35,70 @@ logging.getLogger("websockets.server").setLevel(logging.ERROR)
 logging.getLogger("FoxgloveServer").setLevel(logging.ERROR)
 logging.getLogger("asyncio").setLevel(logging.ERROR)
 
-_LOG_FILE_PATH = None
+_LOG_FILE_PATH: Optional[Path] = None
+_LOG_FILE_WARNING_EMITTED = False
 
 
-def _get_log_file_path() -> Path:
-    DIMOS_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pid = os.getpid()
-    return DIMOS_LOG_DIR / f"dimos_{timestamp}_{pid}.jsonl"
+def _candidate_log_directories() -> list[Path]:
+    """Return preferred log directories ordered by priority."""
+
+    candidates: list[Path] = []
+
+    env_override = os.getenv("DIMOS_LOG_DIR")
+    if env_override:
+        candidates.append(Path(env_override))
+
+    candidates.append(DIMOS_LOG_DIR)
+
+    xdg_state_home = os.getenv("XDG_STATE_HOME")
+    if xdg_state_home:
+        candidates.append(Path(xdg_state_home) / "dimos" / "logs")
+
+    try:
+        home = Path.home()
+    except RuntimeError:
+        home = None
+
+    if home is not None:
+        candidates.append(home / ".cache" / "dimos" / "logs")
+
+    candidates.append(Path(tempfile.gettempdir()) / "dimos" / "logs")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_candidates = []
+    for candidate in candidates:
+        if candidate not in seen:
+            unique_candidates.append(candidate)
+            seen.add(candidate)
+
+    return unique_candidates
 
 
-def _configure_structlog() -> Path:
+def _ensure_writable_directory(directory: Path) -> bool:
+    """Ensure the directory exists and is writable."""
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+
+    return os.access(directory, os.W_OK)
+
+
+def _get_log_file_path() -> Optional[Path]:
+    for directory in _candidate_log_directories():
+        if _ensure_writable_directory(directory):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pid = os.getpid()
+            return directory / f"dimos_{timestamp}_{pid}.jsonl"
+
+    return None
+
+
+def _configure_structlog() -> Optional[Path]:
     global _LOG_FILE_PATH
 
     if _LOG_FILE_PATH:
@@ -82,7 +136,7 @@ def _configure_structlog() -> Path:
     return _LOG_FILE_PATH
 
 
-def setup_logger(level: int | None = None) -> Any:
+def setup_logger(level: int | str | None = None, *, name: str | None = None) -> Any:
     """Set up a structured logger using structlog.
 
     Args:
@@ -93,28 +147,49 @@ def setup_logger(level: int | None = None) -> Any:
     """
 
     caller_frame = inspect.stack()[1]
-    name = caller_frame.filename
-    print("filename:", name)
+    inferred_name = caller_frame.filename
 
     # Convert absolute path to relative path
     try:
-        name = str(Path(name).relative_to(DIMOS_PROJECT_ROOT))
+        inferred_name = str(Path(inferred_name).relative_to(DIMOS_PROJECT_ROOT))
     except (ValueError, TypeError):
         pass
 
+    global _LOG_FILE_WARNING_EMITTED
+
     log_file_path = _configure_structlog()
 
-    if level is None:
-        level_name = os.getenv("DIMOS_LOG_LEVEL", "INFO")
-        level = getattr(logging, level_name)
+    if log_file_path is None and not _LOG_FILE_WARNING_EMITTED:
+        sys.stderr.write(
+            "Warning: Unable to create a writable log directory. File logging will be disabled.\n"
+        )
+        _LOG_FILE_WARNING_EMITTED = True
 
-    stdlib_logger = logging.getLogger(name)
+    configured_name = name
+    configured_level = level
+
+    if isinstance(level, str):
+        normalized_level = level.upper()
+        if hasattr(logging, normalized_level):
+            configured_level = getattr(logging, normalized_level)
+        else:
+            configured_name = level
+            configured_level = None
+
+    if configured_name is None:
+        configured_name = inferred_name
+
+    if configured_level is None:
+        level_name = os.getenv("DIMOS_LOG_LEVEL", "INFO").upper()
+        configured_level = getattr(logging, level_name, logging.INFO)
+
+    stdlib_logger = logging.getLogger(configured_name)
 
     # Remove any existing handlers.
     if stdlib_logger.hasHandlers():
         stdlib_logger.handlers.clear()
 
-    stdlib_logger.setLevel(level)
+    stdlib_logger.setLevel(configured_level)
     stdlib_logger.propagate = False
 
     # Create console handler with pretty formatting.
@@ -145,7 +220,7 @@ def setup_logger(level: int | None = None) -> Any:
         return console_renderer(logger, method_name, event_dict)
 
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
+    console_handler.setLevel(configured_level)
     console_formatter = structlog.stdlib.ProcessorFormatter(
         processor=console_processor_without_callsite,
     )
@@ -153,21 +228,22 @@ def setup_logger(level: int | None = None) -> Any:
     stdlib_logger.addHandler(console_handler)
 
     # Create rotating file handler with JSON formatting.
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file_path,
-        mode="a",
-        maxBytes=10 * 1024 * 1024,  # 10MiB
-        backupCount=20,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(level)
-    file_formatter = structlog.stdlib.ProcessorFormatter(
-        processor=structlog.processors.JSONRenderer(),
-    )
-    file_handler.setFormatter(file_formatter)
-    stdlib_logger.addHandler(file_handler)
+    if log_file_path:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file_path,
+            mode="a",
+            maxBytes=10 * 1024 * 1024,  # 10MiB
+            backupCount=20,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(configured_level)
+        file_formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.processors.JSONRenderer(),
+        )
+        file_handler.setFormatter(file_formatter)
+        stdlib_logger.addHandler(file_handler)
 
-    return structlog.get_logger(name)
+    return structlog.get_logger(configured_name)
 
 
 def setup_exception_handler() -> None:
