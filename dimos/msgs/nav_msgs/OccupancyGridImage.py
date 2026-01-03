@@ -91,8 +91,8 @@ class OccupancyGridImage:
         if np.any(known_mask):
             free_mask = grid == 0
 
-            # free space as blue
-            image_arr[free_mask] = [0, 0, 200]
+            # free space as white
+            image_arr[free_mask] = [255, 255, 255]
             obstacle_mask = (grid > 0) & (grid <= 100)
             # obstaceles as red shades
             if np.any(obstacle_mask):

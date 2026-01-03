@@ -113,11 +113,11 @@ def test_grid_to_image_color_mapping():
     # unknown -> yellow [255,255,0]
     assert (arr[0, 0] == np.array([255, 255, 0], dtype=np.uint8)).all()
 
-    # free -> blue-ish [0,0,200]
-    assert (arr[0, 1] == np.array([0, 0, 200], dtype=np.uint8)).all()
+    # free -> white [255,255,255]
+    assert (arr[0, 1] == np.array([255, 255, 255], dtype=np.uint8)).all()
 
     # occupied (100) -> red shade [100,0,0]
     assert (arr[1, 0] == np.array([100, 0, 0], dtype=np.uint8)).all()
 
     # another free
-    assert (arr[1, 1] == np.array([0, 0, 200], dtype=np.uint8)).all()
+    assert (arr[1, 1] == np.array([255, 255, 255], dtype=np.uint8)).all()
