@@ -27,20 +27,12 @@ import numpy as np
 from scipy import ndimage  # type: ignore[import-untyped]
 
 from dimos.msgs.geometry_msgs import Pose, Vector3, VectorLike
-from dimos.msgs.sensor_msgs import Image
-from dimos.msgs.sensor_msgs.image_impls.AbstractImage import (
-    ImageFormat,
-)
 from dimos.types.timestamped import Timestamped
-from dimos.utils.logging_config import setup_logger
-
-logger = setup_logger()
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from dimos.msgs.sensor_msgs import PointCloud2
-from typing import Optional
 
 import numpy as np
 

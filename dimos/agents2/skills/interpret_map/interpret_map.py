@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
+from dimos.agents2.skills.interpret_map import OccupancyGridImage
 from dimos.core.module import Module
 from dimos.core.rpc_client import RpcCall
 from dimos.core.skill_module import SkillModule
@@ -27,7 +28,6 @@ from dimos.core.stream import In, Out
 from dimos.models.vl.qwen import QwenVlModel
 from dimos.msgs.geometry_msgs import Pose, Quaternion, Vector3
 from dimos.msgs.nav_msgs import OccupancyGrid
-from dimos.msgs.nav_msgs.OccupancyGridImage import OccupancyGridImage
 from dimos.protocol.skill.skill import rpc, skill
 from dimos.utils.generic import extract_json_from_llm_response
 from dimos.utils.logging_config import setup_logger
@@ -36,24 +36,23 @@ logger = setup_logger()
 
 
 class InterpretMapSkill(SkillModule):
-    _latest_local_costmap: OccupancyGrid | None = None
+    _latest_costmap: OccupancyGrid | None = None
     _robot_pose: Pose | None = None
-    # _queried_map: OccupancyGrid | None = None
-
-    local_costmap: In[OccupancyGrid] = None  # type: ignore[assignment]
+    global_costmap: In[OccupancyGrid] = None  # type: ignore[assignment]
 
     @rpc
     def start(self) -> None:
         super().start()
-        self._disposables.add(self.local_costmap.subscribe(self._on_local_costmap))  # type: ignore[arg-type]
+        self._disposables.add(self.global_costmap.subscribe(self._on_costmap))  # type: ignore[arg-type]
         self.vl_model = QwenVlModel()
 
     @rpc
     def stop(self) -> None:
         super().stop()
 
-    def _on_local_costmap(self, costmap: OccupancyGrid) -> None:
-        self._latest_local_costmap = costmap
+    def _on_costmap(self, costmap: OccupancyGrid) -> None:
+        self._latest_costmap = costmap
+        # TODO: sometimes robot pose lies outside map bounds, need to fix
         self._robot_pose = self.tf.get("world", "base_link")
 
     @skill()
@@ -74,7 +73,7 @@ class InterpretMapSkill(SkillModule):
             return "Please provide a description of the goal location."
 
         # grab latest costmap and robot pose
-        costmap = self._latest_local_costmap
+        costmap = self._latest_costmap
         robot_pose = None
         if self._robot_pose:
             robot_pose = Pose(
@@ -84,7 +83,7 @@ class InterpretMapSkill(SkillModule):
         if costmap is None:
             return "No map available."
 
-        grid_image = OccupancyGridImage.from_occupancygrid(
+        grid_image = OccupancyGridImage.from_occupancygrid( # type: ignore[attr-defined]
             occupancy_grid=costmap, size=(1024, 1024), flip_vertical=True, robot_pose=robot_pose
         )
 
@@ -93,14 +92,14 @@ class InterpretMapSkill(SkillModule):
         prompt = (
             "Look at this image carefully \n"
             "it represents a 2D occupancy grid map where,\n"
-            " - blue area is free space, \n"
+            " - white area is free space, \n"
             " - yellow area is unknown space, \n"
-            " - red (and its shades) areas are obstacles, \n"
+            " - red areas are obstacles, \n"
             " - green object represents the robot's position and points to the direction it is facing. \n"
             f"Identify a location in free space based on the following description: {description}\n"
-            "Prioritize selecting a goal position in free space (blue area) over exactly matching the description. \n"
+            "Prioritize selecting a goal position in free space (white area) over exactly matching the description. \n"
             "MAKE SURE there is a clear path from the robot's current position to the goal position without crossing any obstacles. \n"
-            "MAKE SURE the goal position is located in the blue area (free space) of the map and few pixels away from obstacles or objects. \n"
+            "MAKE SURE the goal position is located in the white area (free space) of the map and few pixels away from obstacles or objects. \n"
             "Return ONLY a JSON object with this exact format:\n"
             '{"point": [x, y]}\n'
             f"where x,y are the pixel coordinates of the goal position in the image. \n"
@@ -129,7 +128,7 @@ class InterpretMapSkill(SkillModule):
         # get world coordinates from pixel for navigation
         goal_pose = grid_image.pixel_to_world(x, y, size=(1024, 1024), flip_vertical=True)
 
-        return goal_pose
+        return goal_pose  # type: ignore[no-any-return]
 
 
 def extract_coordinates(point: dict[str, list[int]] | None) -> list[int]:
@@ -148,7 +147,7 @@ def debug_image_with_identified_point(
     """Utility to visualize identified points on the image for debugging."""
     debug_image = image_frame.copy()
     x, y = point
-    cv2.drawMarker(debug_image, (x, y), (255, 255, 255), cv2.MARKER_CROSS, 15, 2)
+    cv2.drawMarker(debug_image, (x, y), (0, 0, 0), cv2.MARKER_CROSS, 15, 2)
     cv2.imwrite(filepath, debug_image)
 
 

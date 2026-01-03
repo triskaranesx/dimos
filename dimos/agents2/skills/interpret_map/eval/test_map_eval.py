@@ -22,12 +22,10 @@ import cv2
 import numpy as np
 import pytest
 
-from dimos.agents2.skills import interpret_map
-from dimos.agents2.skills.interpret_map import InterpretMapSkill
+from dimos.agents2.skills.interpret_map import OccupancyGridImage
 from dimos.models.vl.qwen import QwenVlModel
 from dimos.msgs.geometry_msgs import Pose, Quaternion, Vector3
 from dimos.msgs.nav_msgs import OccupancyGrid
-from dimos.msgs.nav_msgs.OccupancyGridImage import OccupancyGridImage
 from dimos.msgs.sensor_msgs import Image
 from dimos.utils.data import get_data
 from dimos.utils.generic import extract_json_from_llm_response

@@ -129,7 +129,7 @@ class NavigationSkillContainer(SkillModule):
 
         goal_pose = PoseStamped(
             position=make_vector3(x, y, z),
-            orientation=Quaternion.from_euler(make_vector3(0, 0, 0)),
+            orientation=Quaternion(),
             frame_id="map",
         )
 
