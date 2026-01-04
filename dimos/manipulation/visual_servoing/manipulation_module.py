@@ -164,7 +164,7 @@ class ManipulationModule(Module):
         self.grasp_width_offset = 0.03
         self.pregrasp_distance = 0.085
         self.grasp_distance_range = 0.02
-        self.grasp_close_delay = 21.0
+        self.grasp_close_delay = 5.0
         self.grasp_reached_time = None
         self.gripper_max_opening = 0.1
 
