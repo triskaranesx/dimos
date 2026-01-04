@@ -232,6 +232,7 @@ def test_point_placement(test_map, vl_model):
 
         x_px = round(x * width_scale)
         y_px = round(y * height_scale)
+        debug_path = f"./{test_map['map_id']}_{qna['query'].replace(' ', '_')}.png"
 
         if (
             expected_area["x"][0] <= x_px <= expected_area["x"][1]
@@ -239,8 +240,6 @@ def test_point_placement(test_map, vl_model):
         ):
             score += 1
         else:
-            debug_path = f"./{test_map['map_id']}_{qna['query'].replace(' ', '_')}.png"
-
             debug_image_with_identified_point(
                 image.to_opencv(),
                 (x, y),
@@ -257,6 +256,8 @@ def test_point_placement(test_map, vl_model):
 
     total = len(test_map["questions"])
     pass_rate = score / total
+
+    print(f"Pass rate for {test_map['map_id']}: {pass_rate}")
 
     assert pass_rate >= 0.25, (
         "\n"
@@ -311,6 +312,9 @@ def test_map_comprehension(test_map, vl_model):
 
     total = len(test_map["questions"])
     pass_rate = score / total
+
+    print(f"Pass rate for {test_map['map_id']}: {pass_rate}")
+    print(f"{''.join(failed)}")
 
     assert pass_rate >= 0.7, (
         "\n"

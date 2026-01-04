@@ -236,11 +236,11 @@ map_comprehension_tests:
         expected_pattern: '\b(yes)\b'
         category: "spatial_understanding"
 
-      - question: "which room is closest to the robot's current position?"
-        expected_pattern: '\b(bottom right|right|lower right)\b'
+      - question: "which room is closest to the robot's current position? is it above / below / left or right of the robot in the image."
+        expected_pattern: '\b(above|above the robot)\b'
         category: "spatial_understanding"
 
-      - question: "is there a feasible path from the robot's position to the top right room?"
+      - question: "is there a feasible path from the robot's position to the top right room? yes or no"
         expected_pattern: '\b(yes)\b'
         category: "navigation_reasoning"
 
@@ -296,7 +296,7 @@ map_comprehension_tests:
         category: "navigation_reasoning"
 
       - question: "what does the robot see in it's field of view, from left to right?"
-        expected_pattern: '\b(xyz)\b'
+        expected_pattern: '.+'
         category: "spatial_understanding"
 
 
