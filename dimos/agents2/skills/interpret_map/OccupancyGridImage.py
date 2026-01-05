@@ -51,10 +51,12 @@ class OccupancyGridImage:
 
         self.size = size
         if self.size is None:
-            self.size = (1024, int(1024 * (occupancy_grid.height / occupancy_grid.width)))
+            self.size = self._get_encoded_image_size(image.data)
 
         self.flip_vertical = flip_vertical
         self.robot_pose = robot_pose
+        self.grid_to_pix_matrix: NDArray[np.float64] | None = None
+        self.rotated_image_size: tuple[int, int] | None = None
 
     @classmethod
     def from_occupancygrid(
@@ -77,9 +79,9 @@ class OccupancyGridImage:
             OccupancyGridImage with occupancy grid encoded as image
         """
         # convert to RGB image:
-        # - unknown as yellow
-        # - free space as blue
-        # - obstacles as red shades
+        # - unknown as gray
+        # - free space as white
+        # - obstacles as black
         grid = occupancy_grid.grid
         image_arr = np.zeros((*grid.shape, 3), dtype=np.uint8)
 
@@ -94,18 +96,19 @@ class OccupancyGridImage:
             # free space as white
             image_arr[free_mask] = [255, 255, 255]
             obstacle_mask = (grid > 0) & (grid <= 100)
-            # obstaceles as red shades
+            # obstaceles as black
             if np.any(obstacle_mask):
-                # map cost values 1 - 100 from 255 to 100 (dark to bright red)
-                red_intensity = (255 - (grid[obstacle_mask] * 155 // 100)).astype(np.uint8)
-                image_arr[obstacle_mask] = np.stack(
-                    [red_intensity, np.zeros_like(red_intensity), np.zeros_like(red_intensity)],
-                    axis=1,
-                )
+                image_arr[obstacle_mask] = [0, 0, 0]
 
-        # add robot pose if available
+        # overlay robot pose and rotate image keeping robot pointing upwards
         if robot_pose:
             image_arr = cls._overlay_robot_pose(image_arr, occupancy_grid, robot_pose)
+
+            # rotate image to align robot heading upward
+            yaw = robot_pose.orientation.euler[2]
+            image_arr, rotation_matrix, rotated_size = cls._rotate_image_to_align_robot(
+                image_arr, yaw
+            )
 
         # flip vertically for correct orientation
         if flip_vertical:
@@ -113,7 +116,7 @@ class OccupancyGridImage:
 
         # keep original aspect ratio if size not specified
         if size is None:
-            size = cls._get_encoded_image_size(occupancy_grid)
+            size = cls._get_encoded_image_size(image_arr)
 
         # resize
         image_arr_resized = cv2.resize(image_arr, size, interpolation=cv2.INTER_NEAREST)
@@ -128,13 +131,18 @@ class OccupancyGridImage:
             flip_vertical=flip_vertical,
         )
 
+        # store rotation info
+        if rotation_matrix is not None:
+            occupancy_grid_image.grid_to_pix_matrix = rotation_matrix
+            occupancy_grid_image.rotated_image_size = rotated_size
+
         return occupancy_grid_image
 
     @staticmethod
-    def _get_encoded_image_size(occupancy_grid: OccupancyGrid) -> tuple[int, int]:
+    def _get_encoded_image_size(image_arr: NDArray[np.uint8]) -> tuple[int, int]:
         # keep max dimension 1024 for encoding
         MAX_IMAGE_DIMENSION = 1024
-        aspect_ratio = occupancy_grid.width / occupancy_grid.height
+        aspect_ratio = image_arr.shape[1] / image_arr.shape[0]
         if aspect_ratio >= 1.0:
             width = MAX_IMAGE_DIMENSION
             height = int(MAX_IMAGE_DIMENSION / aspect_ratio)
@@ -176,24 +184,63 @@ class OccupancyGridImage:
 
         line_thickness = max(1, int(min_dimension * 0.005))
 
-        # robot position marker
-        cv2.circle(image_arr, (rgx, rgy), robot_radius, (0, 0, 0), -1)
+        # robot marker
+        cv2.circle(image_arr, (rgx, rgy), robot_radius, (255, 0, 0), -1)
 
         # orientation arrow
         yaw = robot_pose.orientation.euler[2]
-        arrow_dx = int(arrow_length * np.cos(yaw))
-        arrow_dy = int(arrow_length * np.sin(yaw))  # account for y + down in image space
+
+        print(f"{yaw=}")
+        arrow_dx = -int(arrow_length * np.sin(yaw))
+        arrow_dy = -int(arrow_length * np.cos(yaw))  # account for y + down in image space
 
         cv2.arrowedLine(
             image_arr,
             (rgx, rgy),
             (rgx + arrow_dx, rgy + arrow_dy),
-            (0, 0, 0),
+            (255, 0, 0),
             line_thickness,
             tipLength=0.5,
         )
 
         return image_arr
+
+    @staticmethod
+    def _rotate_image_to_align_robot(
+        image_arr: NDArray[np.uint8], yaw: float
+    ) -> tuple[NDArray[np.uint8], NDArray[np.float64], tuple[int, int]]:
+        """Rotate image to align robot heading upward.
+
+        args:
+            image_arr: Image array to rotate
+            yaw: Robot yaw angle in radians
+        returns:
+            tuple of (rotated image, rotation matrix, rotated image size)
+        """
+        height, width = image_arr.shape[:2]
+
+        # new dimensions to fit rotated image
+        abs_yaw = abs(yaw)
+        new_height = int(height * abs(np.cos(abs_yaw)) + width * abs(np.sin(abs_yaw)))
+        new_width = int(height * abs(np.sin(abs_yaw)) + width * abs(np.cos(abs_yaw)))
+
+        # rotation matrix
+        rotation_matrix = cv2.getRotationMatrix2D(
+            center=(width / 2, height / 2), angle=-np.rad2deg(yaw), scale=1
+        )
+
+        # adjust new canvas size
+        rotation_matrix[0, 2] += (new_width - width) / 2
+        rotation_matrix[1, 2] += (new_height - height) / 2
+
+        # Apply rotation
+        rotated_image = cv2.warpAffine(image_arr, rotation_matrix, (new_width, new_height))
+
+        return (
+            rotated_image.astype(np.uint8),
+            rotation_matrix.astype(np.float64),
+            (new_width, new_height),
+        )
 
     def is_free_space(
         self,
@@ -302,7 +349,7 @@ class OccupancyGridImage:
         self,
         pixel_x: int,
         pixel_y: int,
-        size: tuple[int, int] = (1024, 1024),
+        size: tuple[int, int],
         flip_vertical: bool | None = None,
     ) -> tuple[int, int]:
         """Convert pixel coordinates in the occupancy grid image to grid coordinates.
@@ -313,14 +360,24 @@ class OccupancyGridImage:
         returns:
             (x, y)
         """
+        pix_to_grid_matrix = cv2.invertAffineTransform(self.grid_to_pix_matrix)  # type: ignore[arg-type]
+
         size = size or self.size
         flip_vertical = flip_vertical if flip_vertical is not None else self.flip_vertical
 
-        if flip_vertical:
-            pixel_y = size[1] - pixel_y
+        # account for image resize before sending to agent
+        scaled_x = round((pixel_x / size[0]) * self.rotated_image_size[0])  # type: ignore[index]
+        scaled_y = round((pixel_y / size[1]) * self.rotated_image_size[1])  # type: ignore[index]
 
-        grid_x = round((pixel_x / size[0]) * self.occupancy_grid.width)
-        grid_y = round((pixel_y / size[1]) * self.occupancy_grid.height)
+        # unrotate
+        point = np.array([scaled_x, scaled_y, 1])
+        unrotated = pix_to_grid_matrix @ point
+
+        if flip_vertical:
+            unrotated[1] = self.occupancy_grid.height - unrotated[1]
+
+        grid_x = round(unrotated[0])
+        grid_y = round(unrotated[1])
 
         return (grid_x, grid_y)
 
@@ -342,10 +399,6 @@ class OccupancyGridImage:
         size = size or self.size
         flip_vertical = flip_vertical if flip_vertical is not None else self.flip_vertical
 
-        if flip_vertical:
-            pixel_y = size[1] - pixel_y
-
-        grid_x = (pixel_x / size[0]) * self.occupancy_grid.width
-        grid_y = (pixel_y / size[1]) * self.occupancy_grid.height
+        grid_x, grid_y = self.pixel_to_grid(pixel_x, pixel_y, size, flip_vertical)
 
         return self.occupancy_grid.grid_to_world(Vector3(grid_x, grid_y, 0.0))
