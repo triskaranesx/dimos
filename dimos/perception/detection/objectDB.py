@@ -43,10 +43,12 @@ class ObjectDB:
         distance_threshold: float = 0.5,
         min_detections_for_permanent: int = 5,
         require_same_name_for_distance_match: bool = True,
+        pending_ttl_seconds: float = 30.0,
     ) -> None:
         self._distance_threshold = distance_threshold
         self._min_detections = min_detections_for_permanent
         self._require_same_name_for_distance_match = require_same_name_for_distance_match
+        self._pending_ttl_seconds = float(pending_ttl_seconds)
 
         # Internal storage - keyed by object_id
         self._pending_objects: dict[str, Object] = {}
@@ -70,6 +72,15 @@ class ObjectDB:
         Returns:
             List of updated/created Object instances
         """
+        # Opportunistically prune stale pending objects to cap memory usage.
+        # Many false positives never reach permanence; without pruning, they accumulate forever.
+        now = max((float(o.ts) for o in objects), default=0.0)
+        if now <= 0.0:
+            import time as _time
+
+            now = _time.time()
+        self._prune_stale_pending(now)
+
         results: list[Object] = []
         for obj in objects:
             updated_obj = self._add_object(obj)
@@ -264,6 +275,35 @@ class ObjectDB:
                     f"Promoted object {obj.object_id} ({obj.name}) to permanent "
                     f"with {obj.detections_count} detections"
                 )
+
+    def _prune_stale_pending(self, now_ts: float) -> None:
+        """Remove pending objects that haven't been updated recently (TTL)."""
+        if self._pending_ttl_seconds <= 0:
+            return
+        with self._lock:
+            stale_ids: list[str] = []
+            for object_id, obj in self._pending_objects.items():
+                try:
+                    age = float(now_ts) - float(obj.ts)
+                except Exception:
+                    age = 0.0
+                if age > self._pending_ttl_seconds:
+                    stale_ids.append(object_id)
+
+            if not stale_ids:
+                return
+
+            for object_id in stale_ids:
+                try:
+                    del self._pending_objects[object_id]
+                except KeyError:
+                    pass
+
+            # Clean up track_id map entries pointing at pruned objects
+            stale_id_set = set(stale_ids)
+            to_delete = [tid for tid, oid in self._track_id_map.items() if oid in stale_id_set]
+            for tid in to_delete:
+                del self._track_id_map[tid]
 
     # ─────────────────────────────────────────────────────────────────
     # Agent encoding

@@ -353,7 +353,9 @@ class ObjectSceneRegistrationModule(Module):
                     with self._object_db._lock:
                         obj = self._object_db.get_by_object_id(object_id)
                         if obj is not None:
-                            obj.mesh_obj = mesh_obj
+                            # Do not retain large mesh bytes in RAM long-term; we persist to disk.
+                            # Keeping mesh_obj around can easily OOM the worker after many objects.
+                            obj.mesh_obj = None
                             obj.mesh_path = mesh_path_str
                             obj.mesh_dimensions = result.get("mesh_dimensions")
                             obj.fp_position = result.get("fp_position")

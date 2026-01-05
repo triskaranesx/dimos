@@ -68,6 +68,8 @@ class Object(Detection3D):
     @property
     def has_mesh(self) -> bool:
         """Check if mesh data is available from hosted service."""
+        if self.mesh_path is not None:
+            return True
         return self.mesh_obj is not None and len(self.mesh_obj) > 0
 
     @property
@@ -123,6 +125,16 @@ class Object(Detection3D):
         Args:
             other: Another Object instance with newer detection data.
         """
+        # Refresh basic detection metadata (used for TTL/last-seen and visualization)
+        self.bbox = other.bbox
+        self.track_id = other.track_id
+        self.class_id = other.class_id
+        self.confidence = other.confidence
+        self.name = other.name
+        self.ts = other.ts
+        self.image = other.image
+        self.frame_id = other.frame_id
+
         # Accumulate pointclouds if both exist and transforms are available
         if (
             self.pointcloud is not None

@@ -81,9 +81,15 @@ class PointCloud2(Timestamped):
     def __str__(self) -> str:
         return f"PointCloud2(frame_id='{self.frame_id}', num_points={len(self.pointcloud.points)})"
 
-    @functools.cached_property
+    @property
     def center(self) -> Vector3:
-        """Calculate the center of the pointcloud in world frame."""
+        """Calculate the center of the pointcloud in world frame.
+
+        Note: do NOT cache this. The underlying Open3D pointcloud can change
+        (e.g., via accumulation + downsampling), and caching would become stale.
+        """
+        if len(self.pointcloud.points) == 0:
+            return Vector3(0.0, 0.0, 0.0)
         center = np.asarray(self.pointcloud.points).mean(axis=0)
         return Vector3(*center)
 
@@ -208,17 +214,14 @@ class PointCloud2(Timestamped):
             colors = None
         return points, colors
 
-    @functools.cache
     def get_axis_aligned_bounding_box(self) -> o3d.geometry.AxisAlignedBoundingBox:
         """Get axis-aligned bounding box of the point cloud."""
         return self.pointcloud.get_axis_aligned_bounding_box()
 
-    @functools.cache
     def get_oriented_bounding_box(self) -> o3d.geometry.OrientedBoundingBox:
         """Get oriented bounding box of the point cloud."""
         return self.pointcloud.get_oriented_bounding_box()
 
-    @functools.cache
     def get_bounding_box_dimensions(self) -> tuple[float, float, float]:
         """Get dimensions (width, height, depth) of axis-aligned bounding box."""
         bbox = self.get_axis_aligned_bounding_box()
