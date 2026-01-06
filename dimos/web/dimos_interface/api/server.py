@@ -63,6 +63,7 @@ class FastAPIServer(EdgeIO):
         port: int = 5555,
         text_streams=None,
         audio_subject=None,
+        bbox_selection_subject=None,
         **streams,
     ) -> None:
         print("Starting FastAPIServer initialization...")  # Debug print
@@ -100,6 +101,7 @@ class FastAPIServer(EdgeIO):
         self.query_subject = rx.subject.Subject()  # type: ignore[var-annotated]
         self.query_stream = self.query_subject.pipe(ops.share())
         self.audio_subject = audio_subject
+        self.bbox_selection_subject = bbox_selection_subject
 
         for key in self.streams:
             if self.streams[key] is not None:
@@ -313,6 +315,48 @@ class FastAPIServer(EdgeIO):
             except Exception as e:
                 print(f"Failed to process uploaded audio: {e}")
                 return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+        @self.app.post("/select_bbox")
+        async def select_bbox(request: Request):  # type: ignore[no-untyped-def]
+            """Receive a UI bbox selection (x1,y1,x2,y2) and emit it on a subject if configured.
+
+            Expected JSON body:
+              {
+                "x1": number, "y1": number, "x2": number, "y2": number,
+                "ts": optional number,
+                "source": optional string,
+                "stream_key": optional string
+              }
+            """
+            if self.bbox_selection_subject is None:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "message": "BBox selection not configured"},
+                )
+
+            try:
+                data = await request.json()
+                x1 = float(data.get("x1"))
+                y1 = float(data.get("y1"))
+                x2 = float(data.get("x2"))
+                y2 = float(data.get("y2"))
+                ts = data.get("ts", None)
+                source = data.get("source", "ui")
+                stream_key = data.get("stream_key", None)
+
+                payload = {
+                    "bbox_xyxy": (x1, y1, x2, y2),
+                    "ts": ts,
+                    "source": source,
+                    "stream_key": stream_key,
+                }
+                self.bbox_selection_subject.on_next(payload)
+                return JSONResponse({"success": True})
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"success": False, "message": f"Invalid bbox payload: {e!s}"},
+                )
 
         # Unitree API endpoints
         @self.app.get("/unitree/status")

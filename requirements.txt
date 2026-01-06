@@ -84,6 +84,9 @@ git+https://github.com/facebookresearch/detectron2.git@v0.6
 # Mapping
 open3d
 
+# RGB-D cameras (optional)
+depthai
+
 # Inference (CPU)
 onnxruntime
 onnx
