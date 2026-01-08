@@ -183,7 +183,7 @@ def phase0(cli_features: list[str] | None = None) -> tuple[dict[str, object], li
 
             if not Path(project_dir / ".git").exists():
                 if p.ask_yes_no(
-                    "Your project doesn't seem to have a (direct) git repo.\nFlakes require a git repo.\nShould I initialize a new git repo for this flake you? (y/n)"
+                    "Your project doesn't seem to have a (direct) git repo.\nFlakes require a git repo.\nShould I initialize a new git repo for this flake you?"
                 ):
                     init_repo_with_gitignore(project_dir)
                     run_command(["git", "add", "flake.nix"], print_command=True)
