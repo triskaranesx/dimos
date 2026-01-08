@@ -48,6 +48,13 @@ all_blueprints = {
     # Piper manipulator blueprints
     "piper-servo": "dimos.hardware.manipulators.piper.blueprints:piper_servo",
     "piper-trajectory": "dimos.hardware.manipulators.piper.blueprints:piper_trajectory",
+    # Control orchestrator blueprints
+    "orchestrator-mock": "dimos.control.blueprints:orchestrator_mock",
+    "orchestrator-xarm7": "dimos.control.blueprints:orchestrator_xarm7",
+    "orchestrator-xarm6": "dimos.control.blueprints:orchestrator_xarm6",
+    "orchestrator-piper": "dimos.control.blueprints:orchestrator_piper",
+    "orchestrator-dual-mock": "dimos.control.blueprints:orchestrator_dual_mock",
+    "orchestrator-dual-xarm": "dimos.control.blueprints:orchestrator_dual_xarm",
     # Demo blueprints
     "demo-osm": "dimos.mapping.osm.demo_osm:demo_osm",
     "demo-skill": "dimos.agents.skills.demo_skill:demo_skill",
@@ -85,6 +92,8 @@ all_modules = {
     "wavefront_frontier_explorer": "dimos.navigation.frontier_exploration.wavefront_frontier_goal_selector",
     "websocket_vis": "dimos.web.websocket_vis.websocket_vis_module",
     "web_input": "dimos.agents.cli.web",
+    # Control orchestrator module
+    "control_orchestrator": "dimos.control.orchestrator",
     # xArm manipulator modules
     "xarm_driver": "dimos.hardware.manipulators.xarm.arm",
     "cartesian_motion_controller": "dimos.manipulation.control.servo_control.cartesian_motion_controller",
