@@ -25,6 +25,7 @@
 <!-- NOTE: these lists potentially need to be edited every time the pyproject.toml is updated! -->
 You can install those:
 - on MacOS with 
+
 <detail><summary>(click to expand)</summary>
 ```sh
 brew install cmake curl grep gnu-sed portaudio ffmpeg git-lfs jpeg-turbo lcm libpng openssl pkg-config gstreamer cairo python@3.13 opencv
@@ -32,6 +33,7 @@ brew install cmake curl grep gnu-sed portaudio ffmpeg git-lfs jpeg-turbo lcm lib
 </detail>
 
 - on Ubuntu/Debian with 
+
 <detail><summary>(click to expand)</summary>
 
 ```sh
