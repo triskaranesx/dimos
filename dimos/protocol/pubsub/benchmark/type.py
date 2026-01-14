@@ -82,15 +82,22 @@ class BenchmarkResult:
     receive_time: float = 0.0  # Time after publishing until all messages received
 
     @property
+    def total_time(self) -> float:
+        """Total time including drain."""
+        return self.duration + self.receive_time
+
+    @property
     def throughput_msgs(self) -> float:
-        """Messages per second."""
-        return self.msgs_received / self.duration if self.duration > 0 else 0
+        """Messages per second (including drain time)."""
+        return self.msgs_received / self.total_time if self.total_time > 0 else 0
 
     @property
     def throughput_bytes(self) -> float:
-        """Bytes per second."""
+        """Bytes per second (including drain time)."""
         return (
-            (self.msgs_received * self.msg_size_bytes) / self.duration if self.duration > 0 else 0
+            (self.msgs_received * self.msg_size_bytes) / self.total_time
+            if self.total_time > 0
+            else 0
         )
 
     @property

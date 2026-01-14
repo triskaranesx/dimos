@@ -140,7 +140,7 @@ if ROS_AVAILABLE:
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             durability=QoSDurabilityPolicy.VOLATILE,
-            depth=10000,
+            depth=5000,
         )
         ros_pubsub = ROS(node_name="benchmark_ros_best_effort", qos=qos)
         ros_pubsub.start()
@@ -153,7 +153,7 @@ if ROS_AVAILABLE:
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             durability=QoSDurabilityPolicy.VOLATILE,
-            depth=10000,
+            depth=5000,
         )
         ros_pubsub = ROS(node_name="benchmark_ros_reliable", qos=qos)
         ros_pubsub.start()
