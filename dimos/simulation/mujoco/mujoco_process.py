@@ -76,7 +76,9 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
         robot_name = "unitree_go1"
 
     controller = MockController(shm)
-    profile = config.mujoco_profile or robot_name
+    # Only use a MuJoCo profile bundle when explicitly requested.
+    # Otherwise fall back to the legacy behavior (menagerie assets + <robot>.xml include).
+    profile = config.mujoco_profile
     model, data = load_model(
         controller,
         robot=robot_name,

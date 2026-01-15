@@ -82,13 +82,24 @@ def get_assets(*, profile: str | None = None) -> dict[str, bytes]:
     # Assets used from https://sketchfab.com/3d-models/mersus-office-8714be387bcd406898b2615f7dae3a47
     # Created by Ryan Cassidy and Coleman Costello
     assets: dict[str, bytes] = {}
+
+    # Add all top-level XMLs. Keys must match include paths like "unitree_go1.xml".
     mjx_env.update_assets(assets, data_dir, "*.xml")
-    mjx_env.update_assets(assets, data_dir / "scene_office1/textures", "*.png")
-    mjx_env.update_assets(assets, data_dir / "scene_office1/office_split", "*.obj")
+
+    # Scene assets are referenced with explicit paths (e.g. "scene_office1/office_split/*.obj")
+    # after we rewrite the scene XML in get_model_xml(). Load them with path-prefixed keys.
+    fs_root = Path(str(data_dir))
+    for p in (fs_root / "scene_office1/textures").glob("*.png"):
+        assets[f"scene_office1/textures/{p.name}"] = p.read_bytes()
+    for p in (fs_root / "scene_office1/office_split").glob("*.obj"):
+        assets[f"scene_office1/office_split/{p.name}"] = p.read_bytes()
+
     if profile:
         # Bundle-scoped assets: keep the sim fully self-contained when a profile is used.
         # Include model.xml and anything under assets/ (meshes/textures).
-        mjx_env.update_assets(assets, data_dir / profile, "*", recursive=True)
+        for p in (fs_root / profile).rglob("*"):
+            if p.is_file():
+                assets[p.relative_to(fs_root).as_posix()] = p.read_bytes()
     else:
         mjx_env.update_assets(assets, mjx_env.MENAGERIE_PATH / "unitree_go1" / "assets")
         mjx_env.update_assets(assets, mjx_env.MENAGERIE_PATH / "unitree_g1" / "assets")
@@ -158,6 +169,30 @@ def load_model(
 def get_model_xml(*, robot: str, scene_xml: str, profile: str | None = None) -> str:
     root = ET.fromstring(scene_xml)
     root.set("model", f"{(profile or robot)}_scene")
+
+    # The office scene config uses a global compiler meshdir/texturedir.
+    # When we include a robot MJCF (e.g. Unitree GO1) that references meshes like "trunk.stl"
+    # without a directory prefix, MuJoCo incorrectly resolves them relative to the scene meshdir
+    # and fails to load. Fix by rewriting scene asset file paths to be explicit and clearing
+    # meshdir/texturedir so they can't leak into the included robot model.
+    compiler = root.find("compiler")
+    if compiler is not None:
+        meshdir = compiler.get("meshdir")
+        texturedir = compiler.get("texturedir")
+
+        if meshdir:
+            for mesh in root.findall("./asset/mesh"):
+                f = mesh.get("file")
+                if f and "/" not in f and "\\" not in f:
+                    mesh.set("file", f"{meshdir}/{f}")
+            compiler.attrib.pop("meshdir", None)
+
+        if texturedir:
+            for tex in root.findall("./asset/texture"):
+                f = tex.get("file")
+                if f and "/" not in f and "\\" not in f:
+                    tex.set("file", f"{texturedir}/{f}")
+            compiler.attrib.pop("texturedir", None)
 
     # Resolve robot include file path.
     # Prefer new bundle layout: <profile>/model.xml
