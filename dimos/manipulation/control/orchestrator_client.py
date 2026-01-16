@@ -45,9 +45,9 @@ from __future__ import annotations
 import math
 import sys
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from dimos.control.orchestrator import ControlOrchestrator
+from dimos.control.orchestrator import ControlOrchestrator, TaskStatus
 from dimos.core.rpc_client import RPCClient
 from dimos.manipulation.planning import JointTrajectoryGenerator
 
@@ -120,9 +120,13 @@ class OrchestratorClient:
         """Get current joint positions for all joints."""
         return self._rpc.get_joint_positions() or {}
 
-    def get_trajectory_status(self, task_name: str) -> dict[str, Any]:
+    def get_ee_positions(self) -> dict[str, dict[str, float] | None]:
+        """Get end-effector positions for all hardware."""        
+        return self._rpc.get_ee_positions() or {}
+
+    def get_trajectory_status(self, task_name: str) -> TaskStatus | None:
         """Get status of a trajectory task."""
-        return self._rpc.get_trajectory_status(task_name) or {}
+        return self._rpc.get_trajectory_status(task_name)
 
     # =========================================================================
     # Trajectory execution (RPC calls)
@@ -320,12 +324,12 @@ def wait_for_completion(client: OrchestratorClient, task_name: str, timeout: flo
 
     while time.time() - start < timeout:
         status = client.get_trajectory_status(task_name)
-        if not status.get("active", False):
-            state: str = status.get("state", "UNKNOWN")
+        if not status or not status.active:
+            state = status.state if status else "UNKNOWN"
             print(f"\nTrajectory finished: {state}")
             return state == "COMPLETED"
 
-        progress = status.get("progress", 0.0)
+        progress = status.progress or 0.0
         if progress != last_progress:
             bar_len = 30
             filled = int(bar_len * progress)
@@ -379,6 +383,7 @@ class OrchestratorShell:
         print("  joints()               - List joints for current task")
         print("\nSettings:")
         print("  current()              - Show current joint positions")
+        print("  ee()                   - Show end-effector positions")
         print("  vel(value)             - Set max velocity (rad/s)")
         print("  accel(value)           - Set max acceleration (rad/s^2)")
         print("=" * 60)
@@ -467,10 +472,13 @@ class OrchestratorShell:
         """Show task status."""
         status = self._client.get_trajectory_status(self._current_task)
         print(f"\nTask: {self._current_task}")
-        print(f"  Active: {status.get('active', False)}")
-        print(f"  State: {status.get('state', 'UNKNOWN')}")
-        if "progress" in status:
-            print(f"  Progress: {status['progress'] * 100:.1f}%")
+        if status:
+            print(f"  Active: {status.active}")
+            print(f"  State: {status.state or 'UNKNOWN'}")
+            if status.progress is not None:
+                print(f"  Progress: {status.progress * 100:.1f}%")
+        else:
+            print("  Status: unavailable")
 
     def cancel(self) -> None:
         """Cancel active trajectory."""
@@ -523,6 +531,25 @@ class OrchestratorShell:
             print(f"Current: {format_positions(positions)}")
         else:
             print("Could not get positions")
+
+    def ee(self) -> None:
+        """Show end-effector positions for all hardware."""
+        ee_positions = self._client.get_ee_positions()
+        if not ee_positions:
+            print("No end-effector positions available")
+            return
+        print("\nEnd-Effector Positions:")
+        for hw_id, pose in ee_positions.items():
+            if pose is None:
+                print(f"  {hw_id}: not supported")
+            else:
+                print(f"  {hw_id}:")
+                print(f"    pos: x={pose['x']:.4f}, y={pose['y']:.4f}, z={pose['z']:.4f} m")
+                print(
+                    f"    rot: r={math.degrees(pose['roll']):.1f}, "
+                    f"p={math.degrees(pose['pitch']):.1f}, "
+                    f"y={math.degrees(pose['yaw']):.1f} deg"
+                )
 
     def vel(self, value: float | None = None) -> None:
         """Set or show max velocity (rad/s)."""
@@ -588,6 +615,7 @@ def interactive_mode(client: OrchestratorClient, initial_task: str) -> None:
             "hw": shell.hw,
             "joints": shell.joints,
             "current": shell.current,
+            "ee": shell.ee,
             "vel": shell.vel,
             "accel": shell.accel,
             "client": client,
