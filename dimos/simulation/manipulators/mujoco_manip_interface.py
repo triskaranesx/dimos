@@ -180,7 +180,6 @@ class MujocoManipInterface:
             targets = [current[i] + velocities[i] * dt for i in range(min(len(velocities), self._dof))]
         self._native.set_joint_position_targets(targets)
         return True
-        return True
 
     def write_stop(self) -> bool:
         if not self._native:
