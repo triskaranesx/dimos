@@ -22,9 +22,7 @@ import time
 
 import mujoco
 import mujoco.viewer as viewer  # type: ignore[import-untyped]
-from robot_descriptions.loaders.mujoco import (
-    load_robot_description,  # type: ignore[import-not-found]
-)
+from robot_descriptions.loaders.mujoco import load_robot_description
 
 from dimos.simulation.engines.base import RobotSpec, SimulationEngine
 from dimos.utils.logging_config import setup_logger
