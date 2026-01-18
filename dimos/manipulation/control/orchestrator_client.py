@@ -121,8 +121,18 @@ class OrchestratorClient:
         return self._rpc.get_joint_positions() or {}
 
     def get_ee_positions(self) -> dict[str, dict[str, float] | None]:
-        """Get end-effector positions for all hardware."""        
+        """Get end-effector positions for all hardware."""
         return self._rpc.get_ee_positions() or {}
+
+    def move_to_cartesian_pose(
+        self, hardware_id: str, x: float, y: float, z: float,
+        roll: float, pitch: float, yaw: float, velocity: float = 0.2,
+        wait: bool = True,
+    ) -> bool:
+        """Move end-effector to Cartesian pose (meters, radians)."""
+        return self._rpc.move_to_cartesian_pose(
+            hardware_id, x, y, z, roll, pitch, yaw, velocity, wait
+        ) or False
 
     def get_trajectory_status(self, task_name: str) -> TaskStatus | None:
         """Get status of a trajectory task."""
@@ -381,9 +391,11 @@ class OrchestratorShell:
         print("  switch('task_name')    - Switch to different task")
         print("  hw()                   - List hardware")
         print("  joints()               - List joints for current task")
+        print("\nCartesian Commands:")
+        print("  ee()                   - Show end-effector positions")
+        print("  move_ee(x,y,z,r,p,y)   - Move EE to pose (m, deg)")
         print("\nSettings:")
         print("  current()              - Show current joint positions")
-        print("  ee()                   - Show end-effector positions")
         print("  vel(value)             - Set max velocity (rad/s)")
         print("  accel(value)           - Set max acceleration (rad/s^2)")
         print("=" * 60)
@@ -551,6 +563,18 @@ class OrchestratorShell:
                     f"y={math.degrees(pose['yaw']):.1f} deg"
                 )
 
+    def move_ee(self, x: float, y: float, z: float, roll: float, pitch: float, yaw: float,
+                hw_id: str | None = None, vel: float = 1.0) -> None:
+        """Move end-effector to pose. Position in meters, angles in degrees."""
+        hardware = hw_id or self._client.list_hardware()[0] if self._client.list_hardware() else None
+        if not hardware:
+            print("No hardware available")
+            return
+        success = self._client.move_to_cartesian_pose(
+            hardware, x, y, z, math.radians(roll), math.radians(pitch), math.radians(yaw), vel
+        )
+        print(f"Move {'succeeded' if success else 'failed'}")
+
     def vel(self, value: float | None = None) -> None:
         """Set or show max velocity (rad/s)."""
         if value is None:
@@ -616,6 +640,7 @@ def interactive_mode(client: OrchestratorClient, initial_task: str) -> None:
             "joints": shell.joints,
             "current": shell.current,
             "ee": shell.ee,
+            "move_ee": shell.move_ee,
             "vel": shell.vel,
             "accel": shell.accel,
             "client": client,

@@ -372,6 +372,47 @@ class ControlOrchestrator(Module[ControlOrchestratorConfig]):
                 positions[hw_id] = hw.read_ee_position()
             return positions
 
+    @rpc
+    def move_to_cartesian_pose(
+        self,
+        hardware_id: str,
+        x: float,
+        y: float,
+        z: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        velocity: float = 1.0,
+        wait: bool = True,
+    ) -> bool:
+        """Move a hardware's end-effector to a Cartesian pose.
+
+        Args:
+            hardware_id: ID of the hardware to move
+            x, y, z: Position in meters
+            roll, pitch, yaw: Orientation in radians
+            velocity: Movement velocity (0.0-1.0, default 1.0)
+            wait: If True, block until motion completes (default True)
+
+        Returns:
+            True if command was sent successfully, False otherwise
+        """
+        with self._hardware_lock:
+            hw = self._hardware.get(hardware_id)
+            if hw is None:
+                logger.warning(f"Hardware {hardware_id} not found")
+                return False
+
+            pose = {
+                "x": x,
+                "y": y,
+                "z": z,
+                "roll": roll,
+                "pitch": pitch,
+                "yaw": yaw,
+            }
+            return hw.write_cartesian_position(pose, velocity, wait)
+
     # =========================================================================
     # Task Management (RPC)
     # =========================================================================

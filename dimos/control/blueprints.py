@@ -145,6 +145,28 @@ orchestrator_xarm6 = control_orchestrator(
     }
 )
 
+# XArm6 Cartesian-only (no trajectory task, for direct Cartesian control)
+orchestrator_xarm6_cartesian = control_orchestrator(
+    tick_rate=100.0,
+    publish_joint_state=True,
+    joint_state_frame_id="orchestrator",
+    hardware=[
+        HardwareConfig(
+            id="arm",
+            type="xarm",
+            dof=6,
+            joint_prefix="arm",
+            ip="192.168.1.210",
+            auto_enable=True,
+        ),
+    ],
+    tasks=[],
+).transports(
+    {
+        ("joint_state", JointState): LCMTransport("/orchestrator/joint_state", JointState),
+    }
+)
+
 # Piper arm (6-DOF, CAN bus)
 orchestrator_piper = control_orchestrator(
     tick_rate=100.0,
@@ -363,5 +385,6 @@ __all__ = [
     "orchestrator_piper",
     "orchestrator_piper_xarm",
     "orchestrator_xarm6",
+    "orchestrator_xarm6_cartesian",
     "orchestrator_xarm7",
 ]

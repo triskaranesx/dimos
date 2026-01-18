@@ -54,7 +54,8 @@ all_blueprints = {
     "demo-object-scene-registration": "dimos.perception.demo_object_scene_registration:demo_object_scene_registration",
     "demo-error-on-name-conflicts": "dimos.robot.unitree_webrtc.demo_error_on_name_conflicts:blueprint",
     # Dynamic Tracking blueprints
-    "aruco-tracker-realsense": "dimos.manipulation.dynamic_tracking.dt_blueprint:aruco_tracker_realsense",
+    "aruco-tracker": "dimos.manipulation.dynamic_tracking.dt_blueprint:aruco_tracker_realsense",
+    "aruco-tracker-xarm6": "dimos.manipulation.dynamic_tracking.dt_blueprint:aruco_tracker_realsense_xarm6",
 }
 
 

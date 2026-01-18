@@ -48,6 +48,8 @@ class ArucoTrackerConfig(ModuleConfig):
     processing_rate: float = 1  # Processing rate in Hz (how often to process latest image)
     max_loops: int = 5  # Maximum number of loops to process
     move_robot_to_aruco: bool = True  # Whether to move the robot to the ArUco marker
+    safety_max_delta: float = 0.10  # Max allowed 3D distance (meters) between commands
+    hardware_id: str = "arm"  # Hardware ID for ControlOrchestrator EE pose lookup
 
 
 class ArucoTracker(Module[ArucoTrackerConfig]):
@@ -92,10 +94,12 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
         self._processing_thread: Thread | None = None
         self._loop_count = 0  # Track number of processing loops
 
-        # RPC call to ManipulationModule for getting EE pose
-        self._get_ee_pose_rpc: RpcCall | None = None
-        # RPC call to ManipulationModule for moving to pose
-        self._move_to_pose_rpc: RpcCall | None = None
+        # RPC calls to ControlOrchestrator
+        self._get_ee_positions_rpc: RpcCall | None = None
+        self._move_to_cartesian_pose_rpc: RpcCall | None = None
+
+        # Safety: track last commanded position for delta check
+        self._last_commanded_pos: tuple[float, float, float] | None = None
 
         # Create output directory if saving images
         if self.config.save_images:
@@ -138,16 +142,52 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
             )
 
     @rpc
-    def set_ManipulationModule_get_ee_pose(self, rpc_call: RpcCall) -> None:
-        """Wire get_ee_pose RPC from ManipulationModule."""
-        self._get_ee_pose_rpc = rpc_call
-        self._get_ee_pose_rpc.set_rpc(self.rpc)
+    def set_ControlOrchestrator_get_ee_positions(self, rpc_call: RpcCall) -> None:
+        """Wire get_ee_positions RPC from ControlOrchestrator."""
+        self._get_ee_positions_rpc = rpc_call
+        self._get_ee_positions_rpc.set_rpc(self.rpc)
 
     @rpc
-    def set_ManipulationModule_move_to_pose(self, rpc_call: RpcCall) -> None:
-        """Wire move_to_pose RPC from ManipulationModule."""
-        self._move_to_pose_rpc = rpc_call
-        self._move_to_pose_rpc.set_rpc(self.rpc)
+    def set_ControlOrchestrator_move_to_cartesian_pose(self, rpc_call: RpcCall) -> None:
+        """Wire move_to_cartesian_pose RPC from ControlOrchestrator."""
+        self._move_to_cartesian_pose_rpc = rpc_call
+        self._move_to_cartesian_pose_rpc.set_rpc(self.rpc)
+
+    def _check_safety_delta(self, x: float, y: float, z: float) -> bool:
+        """Check if the new position is within safety limits of the last commanded position.
+
+        Returns True if safe to move, False if delta exceeds limit.
+        """
+        if self._last_commanded_pos is None:
+            # First command - initialize from current EE position if available
+            if self._get_ee_positions_rpc is not None:
+                try:
+                    ee_positions = self._get_ee_positions_rpc()
+                    if ee_positions and self.config.hardware_id in ee_positions:
+                        pose = ee_positions[self.config.hardware_id]
+                        if pose:
+                            self._last_commanded_pos = (pose["x"], pose["y"], pose["z"])
+                            logger.debug(f"Initialized last_commanded_pos from EE: {self._last_commanded_pos}")
+                except Exception as e:
+                    logger.warning(f"Failed to get initial EE position: {e}")
+
+            # If still None, allow first command
+            if self._last_commanded_pos is None:
+                return True
+
+        # Calculate 3D distance
+        dx = x - self._last_commanded_pos[0]
+        dy = y - self._last_commanded_pos[1]
+        dz = z - self._last_commanded_pos[2]
+        delta = (dx**2 + dy**2 + dz**2) ** 0.5
+
+        if delta > self.config.safety_max_delta:
+            logger.warning(
+                f"Safety check failed: delta {delta:.3f}m exceeds limit {self.config.safety_max_delta:.3f}m"
+            )
+            return False
+
+        return True
 
     def _publish_robot_base_to_world_transform(self) -> None:
         """Publish static transform from base_link to world."""
@@ -164,6 +204,7 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
         """Processing loop that runs at the configured rate."""
         period = 1.0 / self.config.processing_rate
         next_time = time.perf_counter() + period
+        logger.info(f"ArUco processing loop started at {self.config.processing_rate}Hz")
 
         while not self._stop_event.is_set() and self._loop_count < self.config.max_loops:
             try:
@@ -175,10 +216,11 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
 
                 # Increment loop counter
                 self._loop_count += 1
+                logger.debug(f"Completed processing loop {self._loop_count}")
 
                 # Exit after max loops
                 if self._loop_count >= self.config.max_loops:
-                    print(f"Processed {self.config.max_loops} loops, stopping...")
+                    logger.debug(f"Processed {self.config.max_loops} loops, stopping...")
                     break
 
                 # Rate control - maintain precise timing
@@ -190,12 +232,12 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
                     # Fell behind - reset timing
                     next_time = time.perf_counter() + period
                     if sleep_time < -period:
-                        print(f"Processing loop fell behind by {-sleep_time:.3f}s")
+                        logger.warning(f"Processing loop fell behind by {-sleep_time:.3f}s")
 
             except Exception as e:
-                print(f"Error in processing loop: {e}")
+                logger.error(f"Error in processing loop: {e}")
 
-        print(f"Processing loop completed after {self._loop_count} iterations")
+        logger.info(f"ArUco processing loop completed after {self._loop_count} iterations")
         # Thread will exit naturally here - do NOT call self.stop() as it would try to join itself
 
     def _process_image(self, image: Image) -> None:
@@ -260,42 +302,39 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
             if transform:
                 transforms.append(transform)
 
-            print("--------------------------------")
-
-            print(self.tf.graph())
-            # print aruco to camera link
-            logger.info(f"aruco to camera link: {tvec} {quat}")
-            print("--------------------------------")
-            print(f"aruco to camera link: {self.tf.get('aruco_0', 'camera_color_optical_frame')}")
-            print(f"camera link to aruco: {self.tf.get('camera_color_optical_frame', 'aruco_0')}")
-            # print aruco to base link
-            print(f"camera link to ee link: {self.tf.get('camera_color_optical_frame', 'ee_link')}")
-            # print camera link to base link
-            print(f"ee link to base link: {self.tf.get('base_link', 'ee_link')}")
+            # logger.debug("--------------------------------")
+            # logger.debug(f"frame_id: {self.config.camera_frame_id}")
+            # logger.debug("--------------------------------")
+            # logger.debug(f"parent-camera_color_optical_frame to child-aruco: {self.tf.get('camera_color_optical_frame', 'aruco_0')}")
+            # logger.debug(f"parent-camera_color_frame to child-camera_color_optical_frame: {self.tf.get('camera_color_frame', 'camera_color_optical_frame')}")
+            # logger.debug(f"parent-camera_link to child-camera_color_frame: {self.tf.get('camera_link', 'camera_color_frame')}")
+            # logger.debug(f"parent-ee_link to child-camera_color_optical_frame: {self.tf.get('ee_link', 'camera_color_optical_frame')}")
 
             aruco_wrt_robot_base = self.tf.get("base_link", "aruco_0")
-            print(f"aruco wrt robot base: {aruco_wrt_robot_base}")
+            logger.debug(f"aruco wrt robot base: {aruco_wrt_robot_base}")
             if aruco_wrt_robot_base is not None:
                 # Calculate reach pose: adding 150mm to the z-axis and setting orientation
                 # Position: aruco position + 150mm offset in z
-                reach_x = aruco_wrt_robot_base.translation.x
+                reach_x = aruco_wrt_robot_base.translation.x - 0.05  # 5cm offset in x
                 reach_y = aruco_wrt_robot_base.translation.y
-                # reach_z = aruco_wrt_robot_base.translation.z + 0.15  # 150mm offset
-                reach_z = 0.4
+                reach_z = aruco_wrt_robot_base.translation.z + 0.20  # 20cm offset
 
                 # Orientation: roll=-3.13, pitch=0, yaw=0 (in radians)
                 reach_roll = -3.13
                 reach_pitch = 0.0
                 reach_yaw = 0.0
 
-                # print(f"reach pose: x={reach_x:.3f}, y={reach_y:.3f}, z={reach_z:.3f}, "
-                #       f"roll={reach_roll:.3f}, pitch={reach_pitch:.3f}, yaw={reach_yaw:.3f}")
+                logger.debug(f"Computed reach pose: x={reach_x:.3f}, y={reach_y:.3f}, z={reach_z:.3f}, roll={reach_roll:.3f}, pitch={reach_pitch:.3f}, yaw={reach_yaw:.3f}")
 
-                # RPC call to ManipulationModule to move to pose
+                # RPC call to ControlOrchestrator to move to pose
                 if self.config.move_robot_to_aruco:
-                    if self._move_to_pose_rpc is not None:
+                    # Safety check: ensure delta is within limits
+                    if not self._check_safety_delta(reach_x, reach_y, reach_z):
+                        logger.warning("Skipping move command due to safety check failure")
+                    elif self._move_to_cartesian_pose_rpc is not None:
                         try:
-                            success = self._move_to_pose_rpc(
+                            success = self._move_to_cartesian_pose_rpc(
+                                hardware_id=self.config.hardware_id,
                                 x=reach_x,
                                 y=reach_y,
                                 z=reach_z,
@@ -304,19 +343,18 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
                                 yaw=reach_yaw,
                             )
                             if not success:
-                                print("Failed to move to pose, stopping processing loop")
-                                # Force loop to exit by setting count to max
+                                logger.warning("Failed to move to pose, stopping processing loop")
                                 self._loop_count = self.config.max_loops
                                 break
                             else:
-                                print("Successfully commanded move to pose")
+                                self._last_commanded_pos = (reach_x, reach_y, reach_z)
+                                logger.debug("Successfully commanded move to pose")
                         except Exception as e:
-                            print(f"Error calling move_to_pose: {e}")
-                            # Force loop to exit on error
+                            logger.error(f"Error calling move_to_cartesian_pose: {e}")
                             self._loop_count = self.config.max_loops
                             break
                     else:
-                        print("move_to_pose RPC not available")
+                        logger.warning("move_to_cartesian_pose RPC not available")
 
         # Draw markers and save image (using filtered data)
         if transforms:
@@ -357,50 +395,35 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
         # Publish ArUco marker transform
         self.tf.publish(aruco_transform)
 
-        # Publish base_link -> ee_link transform (from ManipulationModule)
-        if self._get_ee_pose_rpc is not None:
+        # Publish base_link -> ee_link transform from ControlOrchestrator
+        if self._get_ee_positions_rpc is not None:
             try:
-                # Get end-effector pose from ManipulationModule via RPC
-                ee_pose = self._get_ee_pose_rpc()
-                print(f"ee pose: {ee_pose}")
-                if ee_pose is not None and len(ee_pose) == 6:
-                    # Extract pose components [x, y, z, roll, pitch, yaw]
-                    x, y, z, roll, pitch, yaw = ee_pose
-                    # Convert Euler angles to quaternion
-                    from dimos.utils.transform_utils import euler_to_quaternion
-                    orientation = euler_to_quaternion(Vector3(roll, pitch, yaw))
-                    # Create transform from base_link to ee_link
-                    ee_transform = Transform(
-                        translation=Vector3(float(x), float(y), float(z)),
-                        rotation=orientation,
-                        frame_id="base_link",
-                        child_frame_id="ee_link",
-                        ts=timestamp,
-                    )
-                    # Publish transform
-                    self.tf.publish(ee_transform)
-
+                # Get end-effector positions from ControlOrchestrator via RPC
+                # Returns dict[hardware_id, dict[x,y,z,roll,pitch,yaw]]
+                ee_positions = self._get_ee_positions_rpc()
+                if ee_positions is not None:
+                    hw_pose = ee_positions.get(self.config.hardware_id)
+                    if hw_pose is not None:
+                        x, y, z = hw_pose["x"], hw_pose["y"], hw_pose["z"]
+                        roll, pitch, yaw = hw_pose["roll"], hw_pose["pitch"], hw_pose["yaw"]
+                        # Convert Euler angles to quaternion
+                        from dimos.utils.transform_utils import euler_to_quaternion
+                        orientation = euler_to_quaternion(Vector3(roll, pitch, yaw))
+                        # Create and publish transform from base_link to ee_link
+                        ee_transform = Transform(
+                            translation=Vector3(float(x), float(y), float(z)),
+                            rotation=orientation,
+                            frame_id="base_link",
+                            child_frame_id="ee_link",
+                            ts=timestamp,
+                        )
+                        self.tf.publish(ee_transform)
+                    else:
+                        logger.warning(f"No EE pose for hardware_id '{self.config.hardware_id}'")
             except Exception as e:
-                print(f"Error getting EE pose from ManipulationModule: {e}")
+                logger.error(f"Error getting EE pose from ControlOrchestrator: {e}")
         else:
-            # Fallback: hardcoded EE pose when RPC is not available
-            # pos: x=0.4161, y=0.0011, z=0.4714 m
-            # rot: r=-179.0, p=0.2, y=0.3 deg
-            import math
-            from dimos.utils.transform_utils import euler_to_quaternion
-
-            x, y, z = 0.4161, 0.0011, 0.4714
-            roll, pitch, yaw = math.radians(-179.0), math.radians(0.2), math.radians(0.3)
-
-            orientation = euler_to_quaternion(Vector3(roll, pitch, yaw))
-            ee_transform = Transform(
-                translation=Vector3(float(x), float(y), float(z)),
-                rotation=orientation,
-                frame_id="base_link",
-                child_frame_id="ee_link",
-                ts=timestamp,
-            )
-            self.tf.publish(ee_transform)
+            logger.warning("ControlOrchestrator RPC not available, cannot publish base_link -> ee_link transform")
         return aruco_transform
 
     def _draw_markers(
@@ -435,6 +458,8 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
             tvec = tvecs[i][0]
 
             # Draw coordinate axes (length = marker_size)
+            # Uses OpenCV ArUco convention: Z out of marker, X/Y in marker plane
+            # Axes rotate with the marker when paper is rotated
             axis_length = self.config.marker_size * 0.5
             cv2.drawFrameAxes(
                 display_image,
@@ -476,7 +501,7 @@ class ArucoTracker(Module[ArucoTrackerConfig]):
                 self.config.output_dir, f"aruco_detection_{self._image_counter:05d}.png"
             )
             cv2.imwrite(filename, save_image)
-            print(f"Saved annotated image to: {filename}")
+            logger.debug(f"Saved annotated image to: {filename}")
             self._image_counter += 1
 
     @rpc
