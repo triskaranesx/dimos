@@ -29,6 +29,7 @@ from dimos.protocol.skill.test_coordinator import SkillContainerTest
 from dimos.robot.unitree.connection.go2 import GO2Connection
 
 
+@pytest.mark.integration
 def test_tool_call() -> None:
     """Test agent initialization and tool call execution."""
     # Create a fake model that will respond with tool calls
@@ -73,6 +74,7 @@ def test_tool_call() -> None:
     agent.stop()
 
 
+@pytest.mark.integration
 def test_image_tool_call() -> None:
     """Test agent with image tool call execution."""
     dimos = start(2)
