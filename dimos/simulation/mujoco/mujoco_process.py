@@ -216,6 +216,7 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
         m_viewer.cam.azimuth = config.mujoco_camera_position_float[4]
         m_viewer.cam.elevation = config.mujoco_camera_position_float[5]
 
+        last_sim_time = float(data.time)
         while m_viewer.is_running() and not shm.should_stop():
             step_start = time.time()
 
@@ -228,6 +229,12 @@ def _run_simulation(config: GlobalConfig, shm: ShmReader) -> None:
 
             person_position_controller.tick(data)
 
+            # Detect MuJoCo viewer reset (e.g. backspace). Reset typically makes time jump backwards.
+            if sdk2_bridge is not None:
+                sim_time = float(data.time)
+                if sim_time + 1e-9 < last_sim_time:
+                    sdk2_bridge.on_mujoco_reset()
+                last_sim_time = sim_time
             m_viewer.sync()
 
             # Always update odometry
