@@ -37,7 +37,7 @@ except ImportError:
     QoSDurabilityPolicy = None  # type: ignore[assignment, misc]
 
 from dimos.core.resource import Resource
-from dimos.protocol.pubsub.lcmpubsub import LCM, Topic
+from dimos.protocol.pubsub.impl.lcmpubsub import LCM, Topic
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger(level=logging.INFO)

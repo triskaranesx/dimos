@@ -32,9 +32,10 @@ import uuid
 import numpy as np
 import numpy.typing as npt
 
-from dimos.protocol.pubsub.lcmpubsub import LCMEncoderMixin, Topic
+from dimos.protocol.pubsub.encoders import LCMEncoderMixin, PickleEncoderMixin
+from dimos.protocol.pubsub.impl.lcmpubsub import Topic
 from dimos.protocol.pubsub.shm.ipc_factory import CpuShmChannel
-from dimos.protocol.pubsub.spec import PickleEncoderMixin, PubSub
+from dimos.protocol.pubsub.spec import PubSub
 from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
@@ -336,7 +337,7 @@ class LCMSharedMemoryPubSubBase(PubSub[Topic, Any]):
 
 
 class LCMSharedMemory(
-    LCMEncoderMixin,
+    LCMEncoderMixin[Topic],
     LCMSharedMemoryPubSubBase,
 ):
     """SharedMemory pubsub that uses LCM binary encoding (no pickle overhead)."""

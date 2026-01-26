@@ -17,7 +17,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from dimos.protocol.pubsub.spec import PickleEncoderMixin, PubSub, PubSubEncoderMixin
+from dimos.protocol.pubsub.encoders import (
+    JpegEncoderMixin,
+    LCMEncoderMixin,
+    PickleEncoderMixin,
+)
+from dimos.protocol.pubsub.patterns import RegexSubscribable
+from dimos.protocol.pubsub.spec import PubSub
 from dimos.protocol.service.lcmservice import (
     LCMConfig,
     LCMService,
@@ -27,6 +33,7 @@ from dimos.utils.logging_config import setup_logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    import re
     import threading
 
     from dimos.msgs import DimosMsg
@@ -45,7 +52,13 @@ class Topic:
         return f"{self.topic}#{self.lcm_type.msg_name}"
 
 
-class LCMPubSubBase(LCMService, PubSub[Topic, Any]):
+class LCMPubSubBase(RegexSubscribable[bytes, str], LCMService, PubSub[Topic, Any]):
+    """LCM-based PubSub with native regex subscription support.
+
+    LCM natively supports regex patterns in subscribe(), so we implement
+    RegexSubscribable directly without needing discovery-based fallback.
+    """
+
     default_config = LCMConfig
     _stop_event: threading.Event
     _thread: threading.Thread | None
@@ -86,33 +99,36 @@ class LCMPubSubBase(LCMService, PubSub[Topic, Any]):
 
         return unsubscribe
 
+    def subscribe_regex(
+        self,
+        pattern: re.Pattern[str],
+        callback: Callable[[bytes, str], Any],
+    ) -> Callable[[], None]:
+        """Subscribe to channels matching a regex pattern.
 
-class LCMEncoderMixin(PubSubEncoderMixin[Topic, Any, bytes]):
-    def encode(self, msg: DimosMsg, _: Topic) -> bytes:
-        return msg.lcm_encode()
+        Note: Callback receives raw bytes and the channel string (not Topic),
+        since we don't know the message type for pattern subscriptions.
+        """
+        if self.l is None:
+            logger.error("Tried to subscribe after LCM was closed")
+            return lambda: None
 
-    def decode(self, msg: bytes, topic: Topic) -> DimosMsg:
-        if topic.lcm_type is None:
-            raise ValueError(
-                f"Cannot decode message for topic '{topic.topic}': no lcm_type specified"
-            )
-        return topic.lcm_type.lcm_decode(msg)
+        # LCM subscribe accepts regex string directly
+        lcm_subscription = self.l.subscribe(
+            pattern.pattern, lambda channel, msg: callback(msg, channel)
+        )
+        lcm_subscription.set_queue_capacity(10000)
 
+        def unsubscribe() -> None:
+            if self.l is None:
+                return
+            self.l.unsubscribe(lcm_subscription)
 
-class JpegEncoderMixin(PubSubEncoderMixin[Topic, Any, bytes]):
-    def encode(self, msg: DimosMsg, _: Topic) -> bytes:
-        return msg.lcm_jpeg_encode()  # type: ignore[attr-defined, no-any-return]
-
-    def decode(self, msg: bytes, topic: Topic) -> DimosMsg:
-        if topic.lcm_type is None:
-            raise ValueError(
-                f"Cannot decode message for topic '{topic.topic}': no lcm_type specified"
-            )
-        return topic.lcm_type.lcm_jpeg_decode(msg)  # type: ignore[attr-defined, no-any-return]
+        return unsubscribe
 
 
 class LCM(
-    LCMEncoderMixin,
+    LCMEncoderMixin,  # type: ignore[type-arg]
     LCMPubSubBase,
 ): ...
 
@@ -124,7 +140,7 @@ class PickleLCM(
 
 
 class JpegLCM(
-    JpegEncoderMixin,
+    JpegEncoderMixin,  # type: ignore[type-arg]
     LCMPubSubBase,
 ): ...
 
