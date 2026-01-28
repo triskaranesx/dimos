@@ -389,6 +389,7 @@ class CalculatorSpec(Spec, Protocol):
     @rpc
     def compute2(self, a: float, b: float) -> float: ...
 
+
 class Calculator1(Module):
     @rpc
     def compute1(self, a: int, b: int) -> int:
@@ -397,9 +398,10 @@ class Calculator1(Module):
     @rpc
     def compute2(self, a: float, b: float) -> float:
         return a + b
+
     @rpc
     def start(): ...
-    
+
     @rpc
     def stop(): ...
 
@@ -412,9 +414,10 @@ class Calculator2(Module):
     @rpc
     def compute2(self, a: float, b: float) -> float:
         return a * b
+
     @rpc
     def start(): ...
-    
+
     @rpc
     def stop(): ...
 
@@ -431,6 +434,7 @@ class Mod1(Module):
     @rpc
     def stop(): ...
 
+
 # link to any module that implements a spec (Autoconnect will handle it)
 class Mod2(Module):
     stream1: In[Image]
@@ -439,7 +443,7 @@ class Mod2(Module):
     @rpc
     def start(self) -> None:
         _ = self.calc.compute1
-    
+
     @rpc
     def stop(): ...
 
