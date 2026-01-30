@@ -11,7 +11,7 @@ Choose your viewer backend via the CLI (preferred):
 dimos run unitree-go2
 
 # Explicitly select the viewer backend:
-dimos --viewer-backend rerun-native run unitree-go2
+dimos --viewer-backend rerun run unitree-go2
 dimos --viewer-backend rerun-web run unitree-go2
 dimos --viewer-backend foxglove run unitree-go2
 ```
@@ -19,7 +19,7 @@ dimos --viewer-backend foxglove run unitree-go2
 Alternative (environment variable):
 
 ```bash
-VIEWER_BACKEND=rerun-native dimos run unitree-go2
+VIEWER_BACKEND=rerun dimos run unitree-go2
 
 # Rerun web viewer - Full dashboard in browser
 VIEWER_BACKEND=rerun-web dimos run unitree-go2
@@ -39,7 +39,7 @@ VIEWER_BACKEND=foxglove dimos run unitree-go2
 
 ---
 
-### Rerun Native (`rerun-native`)
+### Rerun Native (`rerun`)
 
 **What you get:**
 - Native Rerun application (separate window opens automatically)
@@ -182,7 +182,7 @@ This appendix is an **inventory of every current Rerun touchpoint** in the repos
 
 - **`GlobalConfig` flags**
   - **File**: [`dimos/core/global_config.py`](/dimos/core/global_config.py)
-  - **What**: Defines `rerun_enabled`, `viewer_backend` (`rerun-web`, `rerun-native`, `foxglove`), and `rerun_server_addr`.
+  - **What**: Defines `rerun_enabled`, `viewer_backend` (`rerun-web`, `rerun`, `foxglove`), and `rerun_server_addr`.
 
 - **Rerun process lifecycle**
   - **File**: [`dimos/dashboard/rerun_init.py`](/dimos/dashboard/rerun_init.py)

@@ -20,7 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dimos.mapping.occupancy.path_map import NavigationStrategy
 
-ViewerBackend: TypeAlias = Literal["rerun-web", "rerun-native", "foxglove", "none"]
+ViewerBackend: TypeAlias = Literal["rerun", "rerun-web", "foxglove", "none"]
 
 
 def _get_all_numbers(s: str) -> list[float]:
@@ -33,7 +33,7 @@ class GlobalConfig(BaseSettings):
     replay: bool = False
     rerun_enabled: bool = True
     rerun_server_addr: str | None = None
-    viewer_backend: ViewerBackend = "rerun-native"
+    viewer_backend: ViewerBackend = "rerun"
     n_dask_workers: int = 2
     memory_limit: str = "auto"
     mujoco_camera_position: str | None = None

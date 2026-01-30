@@ -48,17 +48,17 @@ class Config(ModuleConfig):
 class RerunBridgeModule(Module):
     """Bridge that logs messages from pubsubs to Rerun.
 
-    Spawns its own Rerun viewer and subscribes to all topics on each provided
-    pubsub. Any message that has a to_rerun() method is automatically logged.
+        Spawns its own Rerun viewer and subscribes to all topics on each provided
+        pubsub. Any message that has a to_rerun() method is automatically logged.
 
-    Example:
-        from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+        Example:
+            from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 
-        lcm = LCM(autoconf=True)
-        bridge = RerunBridgeModule(pubsubs=[lcm])
-        bridge.start()
-        # All messages with to_rerun() are now logged to Rerun
-        bridge.stop()
+            lcm = LCM(autoconf=True)
+            bridge = RerunBridgeModule(pubsubs=[lcm])
+    f        bridge.start()
+            # All messages with to_rerun() are now logged to Rerun
+            bridge.stop()
     """
 
     default_config = Config
@@ -74,7 +74,7 @@ class RerunBridgeModule(Module):
         return f"{self.config.entity_prefix}/{topic_str}"
 
     def _on_message(self, msg: Any, topic: Any) -> None:
-        """Handle incoming message - log to rerun if it has to_rerun."""
+        """Handle incoming message - -4=----log to rerun if it has to_rerun."""
         if not hasattr(msg, "to_rerun"):
             return
 

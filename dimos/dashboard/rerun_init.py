@@ -21,15 +21,15 @@ Architecture:
 
 Viewer modes (set via VIEWER_BACKEND config or environment variable):
     - "rerun-web": Web viewer on port 9090
-    - "rerun-native" (default): Native Rerun viewer (requires display)
+    - "rerun" (default): Native Rerun viewer (requires display)
     - "foxglove": Use Foxglove instead of Rerun
 
 Usage:
     # Set via environment:
-    VIEWER_BACKEND=rerun-web   # or rerun-native or foxglove
+    VIEWER_BACKEND=rerun-web   # or rerun or foxglove
 
     # Or via .env file:
-    viewer_backend=rerun-native
+    viewer_backend=rerun
 
     # In main process (blueprints.py handles this automatically):
     from dimos.dashboard.rerun_init import init_rerun_server
@@ -71,7 +71,7 @@ def init_rerun_server(viewer_mode: str, memory_limit: str = "4GB") -> str:
     Should only be called once from the main process.
 
     Args:
-        viewer_mode: One of "rerun-web", "rerun-native", or "rerun-grpc-only"
+        viewer_mode: One of "rerun-web", "rerun", or "rerun-grpc-only"
         memory_limit: Maximum memory for Rerun viewer (e.g., "16GB", "25%"). Default 16GB.
 
     Returns:
@@ -88,7 +88,7 @@ def init_rerun_server(viewer_mode: str, memory_limit: str = "4GB") -> str:
 
     rr.init("dimos")
 
-    if viewer_mode == "rerun-native":
+    if viewer_mode == "rerun":
         # Spawn native viewer (requires display)
         rr.spawn(port=RERUN_GRPC_PORT, connect=True, memory_limit=memory_limit)
         logger.info("Rerun: spawned native viewer", port=RERUN_GRPC_PORT, memory_limit=memory_limit)
@@ -138,7 +138,7 @@ def connect_rerun(
             return
 
         # Skip if foxglove backend selected
-        if global_config and not global_config.viewer_backend.startswith("rerun"):
+        if global_config and global_config.viewer_backend not in ("rerun", "rerun-web"):
             logger.debug("Rerun connection skipped", viewer_backend=global_config.viewer_backend)
             return
 

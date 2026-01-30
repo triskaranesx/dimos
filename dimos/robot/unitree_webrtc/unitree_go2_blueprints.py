@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
 import platform
 
 from dimos_lcm.foxglove_msgs.ImageAnnotations import (
@@ -34,6 +33,7 @@ from dimos.agents.vlm_agent import vlm_agent
 from dimos.agents.vlm_stream_tester import vlm_stream_tester
 from dimos.constants import DEFAULT_CAPACITY_COLOR_IMAGE
 from dimos.core.blueprints import autoconnect
+from dimos.core.global_config import GlobalConfig
 from dimos.core.transport import (
     JpegLcmTransport,
     JpegShmTransport,
@@ -41,7 +41,6 @@ from dimos.core.transport import (
     ROSTransport,
     pSHMTransport,
 )
-from dimos.dashboard.tf_rerun_module import tf_rerun
 from dimos.mapping.costmapper import cost_mapper
 from dimos.mapping.voxels import voxel_mapper
 from dimos.msgs.geometry_msgs import PoseStamped
@@ -58,57 +57,49 @@ from dimos.perception.experimental.temporal_memory import temporal_memory
 from dimos.perception.spatial_perception import spatial_memory
 from dimos.protocol.mcp.mcp import MCPModule
 from dimos.robot.foxglove_bridge import foxglove_bridge
-import dimos.robot.unitree.connection.go2 as _go2_mod
 from dimos.robot.unitree.connection.go2 import GO2Connection, go2_connection
 from dimos.robot.unitree_webrtc.unitree_skill_container import unitree_skills
 from dimos.utils.monitoring import utilization
 from dimos.visualization.rerun.bridge import rerun_bridge
 from dimos.web.websocket_vis.websocket_vis_module import websocket_vis
 
-_GO2_URDF = Path(_go2_mod.__file__).parent.parent / "go2" / "go2.urdf"
+_config = GlobalConfig()
 
-# Mac has some issue with high bandwidth UDP
-#
-# so we use pSHMTransport for color_image
-# (Could we adress this on the system config layer? Is this fixable on mac?)
-_mac = autoconnect(
-    foxglove_bridge(
-        shm_channels=[
-            "/color_image#sensor_msgs.Image",
-        ]
+# Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
+_mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
+    ("color_image", Image): pSHMTransport(
+        "color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
     ),
-).transports(
-    {
-        ("color_image", Image): pSHMTransport(
-            "color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
-        ),
-    }
-)
+}
 
-
-_linux = autoconnect(foxglove_bridge())
+if _config.viewer_backend == "foxglove":
+    _mac = autoconnect(
+        foxglove_bridge(shm_channels=["/color_image#sensor_msgs.Image"]),
+    ).transports(_mac_transports)
+    _linux = autoconnect(foxglove_bridge())
+elif _config.viewer_backend == "rerun":
+    _mac = autoconnect(rerun_bridge(viewer_mode="native")).transports(_mac_transports)
+    _linux = autoconnect(rerun_bridge(viewer_mode="native"))
+elif _config.viewer_backend == "rerun-web":
+    _mac = autoconnect(rerun_bridge(viewer_mode="web")).transports(_mac_transports)
+    _linux = autoconnect(rerun_bridge(viewer_mode="web"))
+else:  # "none"
+    _mac = autoconnect().transports(_mac_transports)
+    _linux = autoconnect()
 
 unitree_go2_basic = autoconnect(
     go2_connection(),
     _linux if platform.system() == "Linux" else _mac,
     websocket_vis(),
-    tf_rerun(
-        urdf_path=str(_GO2_URDF),
-        cameras=[
-            ("world/robot/camera", "camera_optical", GO2Connection.camera_info_static),
-        ],
-    ),
 ).global_config(n_dask_workers=4, robot_model="unitree_go2")
 
 unitree_go2 = autoconnect(
     unitree_go2_basic,
-    voxel_mapper(voxel_size=0.1),
+    voxel_mapper(voxel_size=0.05),
     cost_mapper(),
     replanning_a_star_planner(),
     wavefront_frontier_explorer(),
 ).global_config(n_dask_workers=6, robot_model="unitree_go2")
-
-unitree_go2_bridge = autoconnect(unitree_go2, rerun_bridge())
 
 
 unitree_go2_ros = unitree_go2.transports(

@@ -620,8 +620,8 @@ class PointCloud2(Timestamped):
 
     def to_rerun(  # type: ignore[no-untyped-def]
         self,
-        radii: float = 0.02,
-        colormap: str | None = None,
+        radii: float = 0.025,
+        colormap: str | None = "turbo",
         colors: list[int] | None = None,
         mode: str = "boxes",
         size: float | None = None,
