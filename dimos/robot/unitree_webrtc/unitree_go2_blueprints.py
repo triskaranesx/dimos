@@ -65,12 +65,17 @@ from dimos.web.websocket_vis.websocket_vis_module import websocket_vis
 
 _config = GlobalConfig()
 
+
+# This stuff (also for viewer) needs to be in some shared base blueprints file
+# I just want to start from Base here in go2
+
 # Mac has some issue with high bandwidth UDP, so we use pSHMTransport for color_image
 _mac_transports: dict[tuple[str, type], pSHMTransport[Image]] = {
     ("color_image", Image): pSHMTransport(
         "color_image", default_capacity=DEFAULT_CAPACITY_COLOR_IMAGE
     ),
 }
+
 
 if _config.viewer_backend == "foxglove":
     _mac = autoconnect(
@@ -95,7 +100,7 @@ unitree_go2_basic = autoconnect(
 
 unitree_go2 = autoconnect(
     unitree_go2_basic,
-    voxel_mapper(voxel_size=0.05),
+    voxel_mapper(voxel_size=0.1),
     cost_mapper(),
     replanning_a_star_planner(),
     wavefront_frontier_explorer(),

@@ -48,17 +48,17 @@ class Config(ModuleConfig):
 class RerunBridgeModule(Module):
     """Bridge that logs messages from pubsubs to Rerun.
 
-        Spawns its own Rerun viewer and subscribes to all topics on each provided
-        pubsub. Any message that has a to_rerun() method is automatically logged.
+    Spawns its own Rerun viewer and subscribes to all topics on each provided
+    pubsub. Any message that has a to_rerun() method is automatically logged.
 
-        Example:
-            from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+    Example:
+        from dimos.protocol.pubsub.impl.lcmpubsub import LCM
 
-            lcm = LCM(autoconf=True)
-            bridge = RerunBridgeModule(pubsubs=[lcm])
-    f        bridge.start()
-            # All messages with to_rerun() are now logged to Rerun
-            bridge.stop()
+        lcm = LCM(autoconf=True)
+        bridge = RerunBridgeModule(pubsubs=[lcm])
+        bridge.start()
+        # All messages with to_rerun() are now logged to Rerun
+        bridge.stop()
     """
 
     default_config = Config
@@ -70,7 +70,9 @@ class RerunBridgeModule(Module):
             return self.config.topic_to_entity(topic)
 
         # Default: use topic.name if available (LCM Topic), else str
+        # Strip everything after # (LCM topic suffix)
         topic_str = getattr(topic, "name", None) or str(topic)
+        topic_str = topic_str.split("#")[0]
         return f"{self.config.entity_prefix}/{topic_str}"
 
     def _on_message(self, msg: Any, topic: Any) -> None:
