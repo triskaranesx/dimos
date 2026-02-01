@@ -18,7 +18,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeGuard,
+    cast,
+    runtime_checkable,
+)
 
 from reactivex.disposable import Disposable
 from toolz import pipe  # type: ignore[import-untyped]
@@ -39,7 +48,22 @@ if TYPE_CHECKING:
     from dimos.protocol.pubsub.spec import SubscribeAllCapable
 
 # to_rerun() can return a single archetype or a list of (entity_path, archetype) tuples
-RerunData: TypeAlias = "Archetype | list[tuple[str, Archetype]]"
+RerunMulti: TypeAlias = "list[tuple[str, Archetype]]"
+RerunData: TypeAlias = "Archetype | RerunMulti"
+
+
+def is_rerun_multi(data: Any) -> TypeGuard[RerunMulti]:
+    """Check if data is a list of (entity_path, archetype) tuples."""
+    from rerun._baseclasses import Archetype
+
+    return (
+        isinstance(data, list)
+        and bool(data)
+        and isinstance(data[0], tuple)
+        and len(data[0]) == 2
+        and isinstance(data[0][0], str)
+        and isinstance(data[0][1], Archetype)
+    )
 
 
 @runtime_checkable
@@ -104,6 +128,9 @@ class RerunBridgeModule(Module):
     default_config = Config
     config: Config
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
     @lru_cache(maxsize=256)
     def _transform_for_entity_path(self, entity_path: str) -> Callable[[Any], RerunData | None]:
         """Return a composed transform for the entity path.
@@ -113,20 +140,25 @@ class RerunBridgeModule(Module):
         """
         from rerun._baseclasses import Archetype
 
+        # find all matching transforms for this entity path
         matches = [
             fn
             for pattern, fn in self.config.transforms.items()
             if pattern_matches(pattern, entity_path)
         ]
 
-        def obligatory_transform(msg: Any) -> RerunData | None:
+        # final obligatory transform (ensures we return Archetype or None)
+        def final_transform(msg: Any) -> RerunData | None:
             if isinstance(msg, Archetype):
+                return msg
+            if is_rerun_multi(msg):
                 return msg
             if isinstance(msg, RerunConvertible):
                 return msg.to_rerun()
             return None
 
-        return lambda msg: pipe(msg, *matches, obligatory_transform)
+        # compose all transforms
+        return lambda msg: pipe(msg, *matches, final_transform)
 
     def _get_entity_path(self, topic: Any) -> str:
         """Convert a topic to a Rerun entity path."""
@@ -137,12 +169,12 @@ class RerunBridgeModule(Module):
         topic_str = getattr(topic, "name", None) or str(topic)
         # Strip everything after # (LCM topic suffix)
         topic_str = topic_str.split("#")[0]
-        return f"{self.config.entity_prefix}/{topic_str}"
+        return f"{self.config.entity_prefix}{topic_str}"
 
     def _on_message(self, msg: Any, topic: Any) -> None:
+        """Handle incoming message - log to rerun."""
         import rerun as rr
 
-        """Handle incoming message - log to rerun."""
         # convert a potentially complex topic object into an str rerun entity path
         entity_path: str = self._get_entity_path(topic)
 
@@ -153,12 +185,12 @@ class RerunBridgeModule(Module):
         if not rerun_data:
             return
 
-        # TFMessage returns list of (entity_path, transform) tuples
-        if isinstance(rerun_data, list):
-            for entity_path, archetype in rerun_data:
-                rr.log(entity_path, archetype)
+        # TFMessage for example returns list of (entity_path, archetype) tuples
+        if is_rerun_multi(rerun_data):
+            for path, archetype in rerun_data:
+                rr.log(path, archetype)
         else:
-            rr.log(entity_path, rerun_data)
+            rr.log(entity_path, cast("Archetype", rerun_data))
 
     @rpc
     def start(self) -> None:
@@ -219,7 +251,14 @@ def main() -> None:
         pubsubs=[LCM(autoconf=True)],
         # defines transforms for rerun entity paths
         transforms={
-            Glob("debug_navigation"): lambda image: image.to_rerun(mode="floor"),
+            Glob("world/debug_navigation"): lambda grid: grid.to_rerun(
+                mode="mesh",
+                colormap="Purples",
+                z_offset=0.015,
+                brightness=0.5,
+                cost_range=[0, 20],
+                free_color="#484981",
+            ),
         },
     )
 

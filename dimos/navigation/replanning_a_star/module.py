@@ -23,7 +23,6 @@ from dimos.core.global_config import GlobalConfig
 from dimos.dashboard.rerun_init import connect_rerun
 from dimos.msgs.geometry_msgs import PoseStamped, Twist
 from dimos.msgs.nav_msgs import OccupancyGrid, Path
-from dimos.msgs.sensor_msgs import Image
 from dimos.navigation.base import NavigationInterface, NavigationState
 from dimos.navigation.replanning_a_star.global_planner import GlobalPlanner
 
@@ -38,7 +37,7 @@ class ReplanningAStarPlanner(Module, NavigationInterface):
     navigation_state: Out[String]  # TODO: set it
     cmd_vel: Out[Twist]
     path: Out[Path]
-    debug_navigation: Out[Image]
+    debug_navigation: Out[OccupancyGrid]
 
     _planner: GlobalPlanner
     _global_config: GlobalConfig

@@ -432,22 +432,27 @@ class OccupancyGrid(Timestamped):
         colormap: str | None = None,
         mode: str = "mesh",
         z_offset: float = 0.01,
+        brightness: float = 1.0,
+        cost_range: tuple[int, int] | None = None,
+        free_color: str | None = None,
         **kwargs: Any,
     ):  # type: ignore[no-untyped-def]
         """Convert to Rerun visualization format.
 
         Args:
             colormap: Optional colormap name (e.g., "RdBu_r" for blue=free, red=occupied).
-                     If None, uses grayscale for image mode or default colors for 3D modes.
+                     If None, uses grayscale for image mode or default colors for mesh mode.
             mode: Visualization mode:
-                - "image": 2D grayscale/colored image (default)
-                - "mesh": 3D textured plane overlay on floor
-                - "points": 3D points for occupied cells only
-            z_offset: Height offset for 3D modes (default 0.01m above floor)
+                - "image": 2D grayscale/colored image
+                - "mesh": 3D textured plane overlay on floor (default)
+            z_offset: Height offset for mesh mode (default 0.01m above floor)
+            brightness: Brightness multiplier (0.0 to 1.0, default 1.0)
+            cost_range: Optional (min, max) cost range to display. Cells outside range use free_color.
+            free_color: Hex color for out-of-range cells (e.g. "#484981"). Default is black.
             **kwargs: Additional args (ignored for compatibility)
 
         Returns:
-            Rerun archetype for logging (rr.Image, rr.Mesh3D, or rr.Points3D)
+            Rerun archetype for logging (rr.Image or rr.Mesh3D)
 
         The visualization uses:
         - Free space (value 0): white/blue
@@ -455,30 +460,48 @@ class OccupancyGrid(Timestamped):
         - Occupied space (value > 0): black/red with gradient
         """
         if self.grid.size == 0:
-            if mode == "image":
-                return rr.Image(np.zeros((1, 1), dtype=np.uint8), color_model="L")
-            elif mode == "mesh":
+            if mode == "mesh":
                 return rr.Mesh3D(vertex_positions=[])
             else:
-                return rr.Points3D([])
+                return rr.Image(np.zeros((1, 1), dtype=np.uint8), color_model="L")
 
-        if mode == "points":
-            return self._to_rerun_points(colormap, z_offset)
-        elif mode == "mesh":
-            return self._to_rerun_mesh(colormap, z_offset)
+        if mode == "mesh":
+            return self._to_rerun_mesh(colormap, z_offset, brightness, cost_range, free_color)
         else:
-            return self._to_rerun_image(colormap)
+            return self._to_rerun_image(colormap, brightness, cost_range)
 
-    def _generate_rgba_texture(self, colormap: str | None = None) -> NDArray[np.uint8]:
+    def _generate_rgba_texture(
+        self,
+        colormap: str | None = None,
+        brightness: float = 1.0,
+        cost_range: tuple[int, int] | None = None,
+        free_color: str | None = None,
+    ) -> NDArray[np.uint8]:
         """Generate RGBA texture for the occupancy grid.
 
         Args:
             colormap: Optional matplotlib colormap name.
+            brightness: Brightness multiplier (0.0 to 1.0).
+            cost_range: Optional (min, max) cost range. Cells outside range use free_color.
+            free_color: Hex color for out-of-range cells (e.g. "#484981"). Default is black.
 
         Returns:
             RGBA numpy array of shape (height, width, 4).
             Note: NOT flipped - caller handles orientation.
         """
+        # Parse free_color hex to RGB
+        if free_color is not None:
+            fc = free_color.lstrip("#")
+            free_rgb = [int(fc[i : i + 2], 16) for i in (0, 2, 4)]
+        else:
+            free_rgb = [0, 0, 0]
+
+        # Determine which cells are in range (if cost_range specified)
+        if cost_range is not None:
+            in_range_mask = (self.grid >= cost_range[0]) & (self.grid <= cost_range[1])
+        else:
+            in_range_mask = None
+
         if colormap is not None:
             cmap = _get_matplotlib_cmap(colormap)
             grid_float = self.grid.astype(np.float32)
@@ -489,19 +512,24 @@ class OccupancyGrid(Timestamped):
             occupied_mask = self.grid > 0
 
             if np.any(free_mask):
-                colors_free = (np.array(cmap(0.0)[:3]) * 255).astype(np.uint8)
+                colors_free = (np.array(cmap(0.0)[:3]) * 255 * brightness).astype(np.uint8)
                 vis[free_mask, :3] = colors_free
                 vis[free_mask, 3] = 255
 
             if np.any(occupied_mask):
                 costs = grid_float[occupied_mask]
                 cost_norm = 0.5 + (costs / 100) * 0.5
-                colors_occ = (cmap(cost_norm)[:, :3] * 255).astype(np.uint8)
+                colors_occ = (cmap(cost_norm)[:, :3] * 255 * brightness).astype(np.uint8)
                 vis[occupied_mask, :3] = colors_occ
                 vis[occupied_mask, 3] = 255
 
             # Unknown cells: fully transparent
             # (vis is already zero-initialized, so alpha=0 by default)
+
+            # Apply cost_range filter - set out-of-range cells to free_color (Rerun mesh doesn't support alpha)
+            if in_range_mask is not None:
+                vis[~in_range_mask, :3] = free_rgb
+                vis[~in_range_mask, 3] = 255
 
             return vis
 
@@ -512,22 +540,32 @@ class OccupancyGrid(Timestamped):
         occupied_mask = self.grid > 0
 
         # Free space: blue-purple #484981
-        vis[free_mask] = [72, 73, 129, 180]
+        vis[free_mask] = [int(72 * brightness), int(73 * brightness), int(129 * brightness), 180]
 
         # Occupied: gradient from blue-purple to black
         if np.any(occupied_mask):
             costs = self.grid[occupied_mask].astype(np.float32)
             factor = (1 - costs / 100).clip(0, 1)
-            vis[occupied_mask, 0] = (72 * factor).astype(np.uint8)
-            vis[occupied_mask, 1] = (73 * factor).astype(np.uint8)
-            vis[occupied_mask, 2] = (129 * factor).astype(np.uint8)
+            vis[occupied_mask, 0] = (72 * factor * brightness).astype(np.uint8)
+            vis[occupied_mask, 1] = (73 * factor * brightness).astype(np.uint8)
+            vis[occupied_mask, 2] = (129 * factor * brightness).astype(np.uint8)
             vis[occupied_mask, 3] = 220
 
         # Unknown cells: fully transparent (already zero from initialization)
 
+        # Apply cost_range filter - set out-of-range cells to free_color
+        if in_range_mask is not None:
+            vis[~in_range_mask, :3] = free_rgb
+            vis[~in_range_mask, 3] = 255
+
         return vis
 
-    def _to_rerun_image(self, colormap: str | None = None):  # type: ignore[no-untyped-def]
+    def _to_rerun_image(  # type: ignore[no-untyped-def]
+        self,
+        colormap: str | None = None,
+        brightness: float = 1.0,
+        cost_range: tuple[int, int] | None = None,
+    ):
         """Convert to 2D image visualization."""
         # Use existing cached visualization functions for supported palettes
         if colormap in ("turbo", "rainbow"):
@@ -538,13 +576,23 @@ class OccupancyGrid(Timestamped):
             else:
                 bgr_image = rainbow_image(self.grid)
 
-            # Convert BGR to RGB and flip for world coordinates
-            rgb_image = np.flipud(bgr_image[:, :, ::-1])
+            # Convert BGR to RGB, apply brightness, and flip for world coordinates
+            rgb_image = (np.flipud(bgr_image[:, :, ::-1]) * brightness).astype(np.uint8)
+
+            # Apply cost_range filter for turbo/rainbow
+            if cost_range is not None:
+                in_range = (self.grid >= cost_range[0]) & (self.grid <= cost_range[1])
+                rgba_image = np.zeros((rgb_image.shape[0], rgb_image.shape[1], 4), dtype=np.uint8)
+                rgba_image[:, :, :3] = rgb_image
+                rgba_image[:, :, 3] = 255
+                rgba_image[np.flipud(~in_range), 3] = 0  # Flip mask to match flipped image
+                return rr.Image(rgba_image, color_model="RGBA")
+
             return rr.Image(rgb_image, color_model="RGB")
 
         if colormap is not None:
             # Use helper and flip for image display
-            rgba = self._generate_rgba_texture(colormap)
+            rgba = self._generate_rgba_texture(colormap, brightness, cost_range)
             return rr.Image(np.flipud(rgba), color_model="RGBA")
 
         # Grayscale visualization (no colormap)
@@ -566,46 +614,14 @@ class OccupancyGrid(Timestamped):
         # Flip vertically to match world coordinates (y=0 at bottom)
         return rr.Image(np.flipud(vis_gray), color_model="L")
 
-    def _to_rerun_points(self, colormap: str | None = None, z_offset: float = 0.01):  # type: ignore[no-untyped-def]
-        """Convert to 3D points for occupied cells."""
-        # Find occupied cells (cost > 0)
-        occupied_mask = self.grid > 0
-        if not np.any(occupied_mask):
-            return rr.Points3D([])
-
-        # Get grid coordinates of occupied cells
-        gy, gx = np.where(occupied_mask)
-        costs = self.grid[occupied_mask].astype(np.float32)
-
-        # Convert to world coordinates
-        ox = self.origin.position.x
-        oy = self.origin.position.y
-        wx = ox + (gx + 0.5) * self.resolution
-        wy = oy + (gy + 0.5) * self.resolution
-        wz = np.full_like(wx, z_offset)
-
-        points = np.column_stack([wx, wy, wz])
-
-        # Determine colors
-        if colormap is not None:
-            # Normalize costs to 0-1 range
-            cost_norm = costs / 100.0
-            cmap = _get_matplotlib_cmap(colormap)
-            point_colors = (cmap(cost_norm)[:, :3] * 255).astype(np.uint8)
-        else:
-            # Default: red gradient based on cost
-            intensity = (costs / 100.0 * 255).astype(np.uint8)
-            point_colors = np.column_stack(
-                [intensity, np.zeros_like(intensity), np.zeros_like(intensity)]
-            )
-
-        return rr.Points3D(
-            positions=points,
-            radii=self.resolution / 2,
-            colors=point_colors,
-        )
-
-    def _to_rerun_mesh(self, colormap: str | None = None, z_offset: float = 0.01):  # type: ignore[no-untyped-def]
+    def _to_rerun_mesh(  # type: ignore[no-untyped-def]
+        self,
+        colormap: str | None = None,
+        z_offset: float = 0.01,
+        brightness: float = 1.0,
+        cost_range: tuple[int, int] | None = None,
+        free_color: str | None = None,
+    ):
         """Convert to 3D textured mesh overlay on floor plane.
 
         Uses a single quad with the occupancy grid as a texture.
@@ -616,7 +632,7 @@ class OccupancyGrid(Timestamped):
 
         # Generate RGBA texture and flip to match world coordinates
         # Grid row 0 is at world y=origin (bottom), but texture row 0 is at UV v=0 (top)
-        rgba = np.flipud(self._generate_rgba_texture(colormap))
+        rgba = np.flipud(self._generate_rgba_texture(colormap, brightness, cost_range, free_color))
 
         # Single quad covering entire grid
         ox = self.origin.position.x

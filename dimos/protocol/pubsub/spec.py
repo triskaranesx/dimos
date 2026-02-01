@@ -180,12 +180,12 @@ class DiscoveryPubSub(PubSub[TopicT, MsgT], ABC):
 
 
 @runtime_checkable
-class AllSubscribable(Protocol[MsgT_co, TopicT_co]):
+class SubscribeAllCapable(Protocol[MsgT_co, TopicT_co]):
     """Protocol for pubsubs that support subscribe_all.
 
     Both AllPubSub (native) and DiscoveryPubSub (synthesized) satisfy this.
     """
 
     def subscribe_all(self, callback: Callable[[Any, Any], Any]) -> Callable[[], None]:
-        """Subscribe to all topics."""
+        """Subscribe to all messages on all topics."""
         ...
