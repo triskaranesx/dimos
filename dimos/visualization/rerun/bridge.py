@@ -256,7 +256,7 @@ def main() -> None:
             "world/debug_navigation": lambda grid: grid.to_rerun(
                 colormap="Accent",
                 z_offset=0.015,
-                opacity=0.33,
+                opacity=0.2,
                 background="#484981",
             ),
         },

@@ -395,7 +395,13 @@ class CameraInfo(Timestamped):
             and self.frame_id == other.frame_id
         )
 
-    def to_rerun(self, image_plane_distance: float = 0.5):  # type: ignore[no-untyped-def]
+    def to_rerun(
+        self,
+        image_plane_distance: float = 1.0,
+        # These are defaults for a typical RGB camera with a known transform
+        image_topic: str | None = "color_image",
+        optical_transform: str | None = "camera_optical",
+    ):
         """Convert to Rerun Pinhole archetype for camera frustum visualization.
 
         Args:
@@ -411,13 +417,51 @@ class CameraInfo(Timestamped):
         fx, fy = self.K[0], self.K[4]
         cx, cy = self.K[2], self.K[5]
 
-        return rr.Pinhole(
+        pinhole = rr.Pinhole(
             focal_length=[fx, fy],
             principal_point=[cx, cy],
             width=self.width,
             height=self.height,
             image_plane_distance=image_plane_distance,
         )
+
+        # If no image topic is specified, We don't know which Image this CameraInfo refers to
+        # return just the pinhole
+        if not image_topic:
+            return pinhole
+
+        ret = []
+
+        # Add pinhole under world/image_topic (we know which Image this CameraInfo refers to)
+        ret.append(
+            (
+                f"world/{image_topic}",
+                rr.Pinhole(
+                    focal_length=[fx, fy],
+                    principal_point=[cx, cy],
+                    width=self.width,
+                    height=self.height,
+                    image_plane_distance=image_plane_distance,
+                ),
+            )
+        )
+
+        if not optical_transform:
+            return ret
+
+        # Add 3d transform from optical frame to world/image_topic (We know where the camera is)
+        ret.append(
+            (
+                "world/color_image",
+                rr.Transform3D(
+                    translation=[0.0, 0.0, 0.0],
+                    rotation=rr.Quaternion(xyzw=[0.0, 0.0, 0.0, 1.0]),
+                    parent_frame=f"tf#/{optical_transform}",
+                ),
+            )
+        )
+
+        return ret
 
 
 class CalibrationProvider:
