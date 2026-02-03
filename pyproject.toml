@@ -53,7 +53,7 @@ dependencies = [
 
     # Core Msgs
     "opencv-python",
-    "open3d",
+    # "open3d", # FIXME: testing on Orin
 
     # CLI
     "pydantic-settings>=2.11.0,<3",
