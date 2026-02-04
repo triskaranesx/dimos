@@ -1,0 +1,369 @@
+#!/usr/bin/env -S deno run --allow-all --no-lock
+import { $ } from "https://esm.sh/@jsr/david__dax@0.43.2/mod.ts" // see: https://github.com/dsherret/dax
+import { Console, green, red, cyan, yellow } from "https://deno.land/x/quickr@0.8.13/main/console.js"
+import { FileSystem, glob } from "https://deno.land/x/quickr@0.8.13/main/file_system.js"
+
+const projectDir = await FileSystem.walkUpUntil(".git")
+const cachePath = `${projectDir}/.cache.ignore/test_cache.json`
+await FileSystem.ensureFolderExists(FileSystem.dirname(cachePath))
+
+function printHelp() {
+  console.log(`Usage: run/tests [options] [marker1,marker2 ...]
+
+Options:
+  --help, -h        Show this help
+  --all             Enable all markers
+  --without <list>  Comma-separated markers to disable (applied after --all)
+  --only-failed     Run only tests that failed in the last cache
+  --timeout-ms <n>  Kill a test process after n milliseconds (wall time)
+
+Markers can be provided as comma-separated values or repeated args.`)
+}
+
+function unique(list) {
+  return [...new Set(list)]
+}
+
+function parseCliMarkers(args) {
+  const markers = []
+  for (const arg of args) {
+    for (const part of arg.split(",")) {
+      const trimmed = part.trim()
+      if (trimmed.length > 0) markers.push(trimmed)
+    }
+  }
+  return unique(markers)
+}
+
+function parseArgs(args) {
+  const markers = []
+  const without = []
+  let enableAll = false
+  let onlyFailed = false
+  let timeoutMs = null
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === "--help" || arg === "-h") {
+      printHelp()
+      Deno.exit(0)
+    }
+    if (arg === "--all") {
+      enableAll = true
+      continue
+    }
+    if (arg === "--only-failed") {
+      onlyFailed = true
+      continue
+    }
+    if (arg === "--timeout-ms") {
+      const value = args[i + 1]
+      if (!value) {
+        console.error("Missing value for --timeout-ms")
+        Deno.exit(2)
+      }
+      const parsed = Number.parseInt(value, 10)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        console.error(`Invalid value for --timeout-ms: ${value}`)
+        Deno.exit(2)
+      }
+      timeoutMs = parsed
+      i += 1
+      continue
+    }
+    if (arg.startsWith("--timeout-ms=")) {
+      const value = arg.slice("--timeout-ms=".length)
+      const parsed = Number.parseInt(value, 10)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        console.error(`Invalid value for --timeout-ms: ${value}`)
+        Deno.exit(2)
+      }
+      timeoutMs = parsed
+      continue
+    }
+    if (arg === "--without") {
+      const value = args[i + 1]
+      if (!value) {
+        console.error("Missing value for --without")
+        Deno.exit(2)
+      }
+      without.push(...parseCliMarkers([value]))
+      i += 1
+      continue
+    }
+    if (arg.startsWith("--without=")) {
+      without.push(...parseCliMarkers([arg.slice("--without=".length)]))
+      continue
+    }
+    markers.push(...parseCliMarkers([arg]))
+  }
+  return {
+    markers: unique(markers),
+    without: unique(without),
+    enableAll,
+    onlyFailed,
+    timeoutMs,
+  }
+}
+
+function parseAvailableMarkers(output) {
+  const markers = []
+  const cleaned = output.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+    "",
+  )
+  const re = /^@pytest\.mark\.([A-Za-z0-9_]+):/gm
+  let match
+  while ((match = re.exec(cleaned)) !== null) {
+    markers.push(match[1])
+  }
+  return unique(markers)
+}
+
+async function loadCache(path) {
+  try {
+    const raw = await Deno.readTextFile(path)
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === "object" && parsed.tests && typeof parsed.tests === "object") {
+      return parsed
+    }
+  } catch {
+    // ignore missing or invalid cache
+  }
+  return { tests: {} }
+}
+
+async function saveCache(path, cache) {
+  const json = JSON.stringify(cache, null, 2)
+  await Deno.writeTextFile(path, json + "\n")
+}
+
+function getEffectiveMarkers(itemMarkers, availableMarkerSet) {
+  const filtered = []
+  for (const marker of itemMarkers) {
+    if (availableMarkerSet.has(marker)) filtered.push(marker)
+  }
+  return unique(filtered)
+}
+
+function buildCollectorScript() {
+  return `import contextlib
+import io
+import json
+import pytest
+
+class Collector:
+    def __init__(self):
+        self.items = []
+
+    def pytest_collection_finish(self, session):
+        for item in session.items:
+            markers = sorted({m.name for m in item.iter_markers()})
+            self.items.append({\"nodeid\": item.nodeid, \"markers\": markers})
+
+collector = Collector()
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+    ret = pytest.main([\"--collect-only\", \"-q\", \"--disable-warnings\", \"--continue-on-collection-errors\", \"-p\", \"no:warnings\"], plugins=[collector])
+
+print(json.dumps({\"items\": collector.items, \"retcode\": ret, \"output\": buf.getvalue()}))
+`
+}
+
+async function collectTests(pythonCmd) {
+  const scriptPath = await Deno.makeTempFile({ suffix: ".py" })
+  try {
+    await Deno.writeTextFile(scriptPath, buildCollectorScript())
+    const collectRaw = await $`${pythonCmd} ${scriptPath}`.text()
+    return JSON.parse(collectRaw)
+  } finally {
+    await Deno.remove(scriptPath).catch(() => {})
+  }
+}
+
+async function runSingleTest(pythonCmd, nodeid) {
+  const start = performance.now()
+  let code = 0
+  let output = ""
+  try {
+    const timeoutSeconds = timeoutMs ? Math.max(timeoutMs / 1000, 0.001) : null
+    if (timeoutSeconds && timeoutCmd) {
+      output = await $`${timeoutCmd} ${timeoutSeconds} ${pythonCmd} -m pytest -o ${"addopts=-v -p no:warnings -ra --color=yes"} -r s --maxfail=1 ${nodeid}`.text()
+    } else {
+      output = await $`${pythonCmd} -m pytest -o ${"addopts=-v -p no:warnings -ra --color=yes"} -r s --maxfail=1 ${nodeid}`.text()
+    }
+  } catch (err) {
+    code = typeof err?.code === "number" ? err.code : 1
+    output = `${err?.stdout ?? ""}${err?.stderr ?? ""}`
+  }
+  const wallDurationSeconds = (performance.now() - start) / 1000
+  let durationSeconds = wallDurationSeconds
+  const durationMatch = [...output.matchAll(/\bin ([0-9.]+)s\b/g)].pop()
+  if (durationMatch && durationMatch[1]) {
+    const parsed = Number.parseFloat(durationMatch[1])
+    if (Number.isFinite(parsed)) {
+      durationSeconds = parsed
+    }
+  }
+  let status = "pass"
+  if (code !== 0) {
+    status = "fail"
+  } else if (/\bSKIPPED\b/i.test(output) || /\bskipped\b/i.test(output)) {
+    status = "skip"
+  }
+  return { code, durationSeconds, wallDurationSeconds, status }
+}
+
+const pythonCmd = "python"
+
+async function findTimeoutCommand() {
+  try {
+    await $`command -v timeout`.quiet()
+    return "timeout"
+  } catch {
+    // ignore
+  }
+  try {
+    await $`command -v gtimeout`.quiet()
+    return "gtimeout"
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+const markerOutput = await $`${pythonCmd} -m pytest --markers`.text()
+const availableMarkers = parseAvailableMarkers(markerOutput)
+const availableMarkerSet = new Set(availableMarkers)
+
+console.log("Available markers:")
+for (const marker of availableMarkers) {
+  console.log(`- ${marker}`)
+}
+
+const { markers: requestedMarkers, without: withoutMarkers, enableAll, onlyFailed, timeoutMs } = parseArgs(Deno.args)
+const timeoutCmd = await findTimeoutCommand()
+if (timeoutMs && !timeoutCmd) {
+  console.error("Warning: --timeout-ms provided but no timeout/gtimeout command found; running without a timeout.")
+}
+const enabledMarkerSet = new Set(requestedMarkers)
+if (enableAll) {
+  for (const marker of availableMarkers) enabledMarkerSet.add(marker)
+}
+for (const marker of withoutMarkers) enabledMarkerSet.delete(marker)
+const enabledMarkers = [...enabledMarkerSet]
+console.log("")
+console.log(`Enabled markers: ${enabledMarkers.length > 0 ? enabledMarkers.join(", ") : "(none)"}`)
+if (withoutMarkers.length > 0) {
+  console.log(`Disabled markers: ${withoutMarkers.join(", ")}`)
+}
+if (onlyFailed) {
+  console.log("Only failed tests: enabled")
+}
+console.log("")
+
+console.log("Getting all test names (takes a second to scan the entire project)")
+const collection = await collectTests(pythonCmd)
+if (collection.retcode !== 0) {
+  if (collection.output && collection.output.trim().length > 0) {
+    const trimmed = collection.output.trim()
+    const maxChars = 8000
+    const sliced = trimmed.length > maxChars ? trimmed.slice(trimmed.length - maxChars) : trimmed
+    console.error(sliced)
+  }
+  if (!collection.items || collection.items.length === 0) {
+    console.error("Test collection failed.")
+    Deno.exit(collection.retcode)
+  }
+  console.error("Test collection had errors; continuing with collected tests.")
+}
+
+const items = collection.items || []
+console.log("")
+console.log(`Collected ${items.length} tests:`)
+for (const item of items) {
+  console.log(item.nodeid)
+}
+
+const selectedTests = []
+for (const item of items) {
+  const effectiveMarkers = getEffectiveMarkers(item.markers || [], availableMarkerSet)
+  const hasMarkers = effectiveMarkers.length > 0
+  const enabledByMarkers = effectiveMarkers.some((marker) => enabledMarkerSet.has(marker))
+  if (!hasMarkers || enabledByMarkers) {
+    selectedTests.push({ nodeid: item.nodeid, markers: effectiveMarkers })
+  }
+}
+
+console.log("")
+console.log(`Selected ${selectedTests.length} tests.`)
+
+const cache = await loadCache(cachePath)
+
+let filteredTests = selectedTests
+if (onlyFailed) {
+  filteredTests = selectedTests.filter((test) => cache.tests[test.nodeid]?.status === "fail")
+  console.log(`Only-failed selection: ${filteredTests.length} tests.`)
+}
+
+const unknown = []
+const known = []
+for (const test of filteredTests) {
+  const cached = cache.tests[test.nodeid]
+  const lastSuccessWall = cached?.last_success_wall_duration
+  const wallDuration = cached?.wall_duration_seconds
+  const lastSuccessDuration = cached?.last_success_duration
+  if (typeof lastSuccessWall === "number" && Number.isFinite(lastSuccessWall)) {
+    known.push({ ...test, durationSeconds: lastSuccessWall })
+  } else if (typeof wallDuration === "number" && Number.isFinite(wallDuration)) {
+    known.push({ ...test, durationSeconds: wallDuration })
+  } else if (typeof lastSuccessDuration === "number" && Number.isFinite(lastSuccessDuration)) {
+    known.push({ ...test, durationSeconds: lastSuccessDuration })
+  } else if (cached && typeof cached.duration_seconds === "number" && Number.isFinite(cached.duration_seconds)) {
+    known.push({ ...test, durationSeconds: cached.duration_seconds })
+  } else {
+    unknown.push(test)
+  }
+}
+
+known.sort((a, b) => a.durationSeconds - b.durationSeconds)
+const runQueue = [...unknown, ...known]
+
+for (const test of runQueue) {
+  console.log("")
+  Console.write(`Running ${test.nodeid}...`)
+  const { code, durationSeconds, wallDurationSeconds, status } = await runSingleTest(pythonCmd, test.nodeid)
+  const durationSecondsFixed = Number(durationSeconds.toFixed(3))
+  const wallDurationSecondsFixed = Number(wallDurationSeconds.toFixed(3))
+  cache.tests[test.nodeid] = {
+    duration_seconds: durationSecondsFixed,
+    wall_duration_seconds: wallDurationSecondsFixed,
+    status,
+    last_run: new Date().toISOString(),
+    last_success_duration:
+      status === "pass" ? durationSecondsFixed : cache.tests[test.nodeid]?.last_success_duration,
+    last_success_wall_duration:
+      status === "pass" ? wallDurationSecondsFixed : cache.tests[test.nodeid]?.last_success_wall_duration,
+    markers: test.markers,
+  }
+  await saveCache(cachePath, cache)
+  Console.write(` [${cyan(durationSecondsFixed)}s `)
+  if (status === "pass") {
+    Console.write(` ${green("✓")} ]`)
+  } else if (status === "fail") {
+    Console.write(` ${red("✗")} ]`)
+  } else if (status === "skip") {
+    Console.write(` ${yellow("-")} ]`)
+  }
+}
+
+const failures = Object.entries(cache.tests).filter(([, entry]) => entry.status === "fail").length
+if (failures > 0) {
+  console.log("")
+  console.log(`Completed with ${failures} failing test(s). ${red("✗")}`)
+  Deno.exit(1)
+} else {
+    console.log(`Completed with 0 failing tests! ${green("✓")}`)
+
+}
