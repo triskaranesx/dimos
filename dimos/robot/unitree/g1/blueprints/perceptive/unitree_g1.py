@@ -16,9 +16,10 @@
 """G1 stack with perception and memory."""
 
 from dimos.core.blueprints import autoconnect
-
-from ..basic.unitree_g1_basic import unitree_g1_basic
-from ._perception_and_memory import _perception_and_memory
+from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic import unitree_g1_basic
+from dimos.robot.unitree.g1.blueprints.perceptive._perception_and_memory import (
+    _perception_and_memory,
+)
 
 unitree_g1 = autoconnect(
     unitree_g1_basic,

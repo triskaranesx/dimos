@@ -15,22 +15,23 @@
 
 """Cascaded G1 blueprints split into focused modules."""
 
-from .agentic._agentic_skills import _agentic_skills
-from .agentic.unitree_g1_agentic import unitree_g1_agentic
-from .agentic.unitree_g1_agentic_sim import unitree_g1_agentic_sim
-from .agentic.unitree_g1_full import unitree_g1_full
-from .basic.unitree_g1_basic import unitree_g1_basic
-from .basic.unitree_g1_basic_sim import unitree_g1_basic_sim
-from .basic.unitree_g1_joystick import unitree_g1_joystick
-from .primitive.uintree_g1_primitive_no_nav import (
+from dimos.robot.unitree.g1.blueprints.agentic._agentic_skills import _agentic_skills
+from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic import unitree_g1_agentic
+from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_agentic_sim import unitree_g1_agentic_sim
+from dimos.robot.unitree.g1.blueprints.agentic.unitree_g1_full import unitree_g1_full
+from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic import unitree_g1_basic
+from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic_sim import unitree_g1_basic_sim
+from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_joystick import unitree_g1_joystick
+from dimos.robot.unitree.g1.blueprints.primitive.uintree_g1_primitive_no_nav import (
     uintree_g1_basic_no_nav,
     uintree_g1_basic_no_nav as basic_no_nav,
 )
-from .smart._perception_and_memory import _perception_and_memory
-from .smart.unitree_g1 import unitree_g1
-from .smart.unitree_g1_detection import unitree_g1_detection
-from .smart.unitree_g1_shm import unitree_g1_shm
-from .smart.unitree_g1_sim import unitree_g1_sim
+
+from .perceptive._perception_and_memory import _perception_and_memory
+from .perceptive.unitree_g1 import unitree_g1
+from .perceptive.unitree_g1_detection import unitree_g1_detection
+from .perceptive.unitree_g1_shm import unitree_g1_shm
+from .perceptive.unitree_g1_sim import unitree_g1_sim
 
 __all__ = [
     "_agentic_skills",

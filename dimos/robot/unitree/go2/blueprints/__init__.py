@@ -15,19 +15,33 @@
 
 """Cascaded GO2 blueprints split into focused modules."""
 
-from .agentic._common_agentic import _common_agentic
-from .agentic.unitree_go2_agentic import unitree_go2_agentic
-from .agentic.unitree_go2_agentic_huggingface import unitree_go2_agentic_huggingface
-from .agentic.unitree_go2_agentic_mcp import unitree_go2_agentic_mcp
-from .agentic.unitree_go2_agentic_ollama import unitree_go2_agentic_ollama
-from .agentic.unitree_go2_temporal_memory import unitree_go2_temporal_memory
-from .basic.unitree_go2_basic import _linux, _mac, unitree_go2_basic
-from .smart._with_jpeg import _with_jpeglcm, _with_jpegshm
-from .smart.unitree_go2 import unitree_go2
-from .smart.unitree_go2_detection import unitree_go2_detection
-from .smart.unitree_go2_ros import unitree_go2_ros
-from .smart.unitree_go2_spatial import unitree_go2_spatial
-from .smart.unitree_go2_vlm_stream_test import unitree_go2_vlm_stream_test
+from dimos.robot.unitree.go2.blueprints.agentic._common_agentic import _common_agentic
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic_huggingface import (
+    unitree_go2_agentic_huggingface,
+)
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic_mcp import (
+    unitree_go2_agentic_mcp,
+)
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic_ollama import (
+    unitree_go2_agentic_ollama,
+)
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_temporal_memory import (
+    unitree_go2_temporal_memory,
+)
+from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import (
+    _linux,
+    _mac,
+    unitree_go2_basic,
+)
+from dimos.robot.unitree.go2.blueprints.smart._with_jpeg import _with_jpeglcm, _with_jpegshm
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_detection import unitree_go2_detection
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_ros import unitree_go2_ros
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_vlm_stream_test import (
+    unitree_go2_vlm_stream_test,
+)
 
 __all__ = [
     "_common_agentic",

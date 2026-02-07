@@ -28,8 +28,7 @@ from dimos.perception.detection.detectors.person.yolo import YoloPersonDetector
 from dimos.perception.detection.module3D import Detection3DModule, detection3d_module
 from dimos.perception.detection.moduleDB import ObjectDBModule, detection_db_module
 from dimos.perception.detection.person_tracker import PersonTracker, person_tracker_module
-
-from ..basic.unitree_g1_basic import unitree_g1_basic
+from dimos.robot.unitree.g1.blueprints.basic.unitree_g1_basic import unitree_g1_basic
 
 unitree_g1_detection = (
     autoconnect(

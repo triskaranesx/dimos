@@ -15,8 +15,7 @@
 
 from dimos.core.blueprints import autoconnect
 from dimos.perception.experimental.temporal_memory import temporal_memory
-
-from .unitree_go2_agentic import unitree_go2_agentic
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
 
 unitree_go2_temporal_memory = autoconnect(
     unitree_go2_agentic,

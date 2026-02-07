@@ -17,9 +17,8 @@ from dimos.agents.agent import llm_agent
 from dimos.agents.ollama_agent import ollama_installed
 from dimos.agents.spec import Provider
 from dimos.core.blueprints import autoconnect
-
-from ..smart.unitree_go2_spatial import unitree_go2_spatial
-from ._common_agentic import _common_agentic
+from dimos.robot.unitree.go2.blueprints.agentic._common_agentic import _common_agentic
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
 
 unitree_go2_agentic_ollama = autoconnect(
     unitree_go2_spatial,

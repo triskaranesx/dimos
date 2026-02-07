@@ -17,8 +17,7 @@ from dimos.core.blueprints import autoconnect
 from dimos.core.transport import JpegLcmTransport, JpegShmTransport
 from dimos.msgs.sensor_msgs import Image
 from dimos.robot.foxglove_bridge import foxglove_bridge
-
-from .unitree_go2 import unitree_go2
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 
 _with_jpeglcm = unitree_go2.transports(
     {

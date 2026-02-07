@@ -15,8 +15,7 @@
 
 from dimos.core.blueprints import autoconnect
 from dimos.protocol.mcp.mcp import MCPModule
-
-from .unitree_go2_agentic import unitree_go2_agentic
+from dimos.robot.unitree.go2.blueprints.agentic.unitree_go2_agentic import unitree_go2_agentic
 
 unitree_go2_agentic_mcp = autoconnect(
     unitree_go2_agentic,
