@@ -24,7 +24,9 @@ from typing import Any
 from dimos_lcm.std_msgs import String
 from reactivex.disposable import CompositeDisposable, Disposable
 
-from dimos.core import In, Module, Out, rpc
+from dimos.core.core import rpc
+from dimos.core.module import Module
+from dimos.core.stream import In, Out
 from dimos.mapping.types import LatLon
 from dimos.msgs.geometry_msgs import PoseStamped, Quaternion, Transform, Twist, Vector3
 from dimos.msgs.sensor_msgs import Image

@@ -27,7 +27,9 @@ from dimos_lcm.vision_msgs import (
 import numpy as np
 from reactivex.disposable import Disposable
 
-from dimos.core import In, Module, ModuleConfig, Out, rpc
+from dimos.core.core import rpc
+from dimos.core.module import Module, ModuleConfig
+from dimos.core.stream import In, Out
 from dimos.msgs.geometry_msgs import Pose, Quaternion, Transform, Vector3
 from dimos.msgs.sensor_msgs import (
     CameraInfo,
