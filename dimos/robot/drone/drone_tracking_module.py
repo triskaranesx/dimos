@@ -113,7 +113,7 @@ class DroneTrackingModule(Module):
             return data
 
     @rpc
-    def start(self) -> bool:
+    def start(self) -> None:
         """Start the tracking module and subscribe to video input."""
         if self.video_input.transport:
             self.video_input.subscribe(self._on_new_frame)
@@ -124,7 +124,7 @@ class DroneTrackingModule(Module):
         if self.follow_object_cmd.transport:
             self.follow_object_cmd.subscribe(self._on_follow_object_cmd)
 
-        return True
+        return
 
     @rpc
     def stop(self) -> None:
