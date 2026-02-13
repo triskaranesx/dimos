@@ -19,8 +19,8 @@ from dimos.msgs.nav_msgs import OccupancyGrid
 from dimos.msgs.sensor_msgs import PointCloud2
 
 
-class Global3DMap(Protocol):
-    global_pointcloud: Out[PointCloud2]
+class GlobalPointcloud(Protocol):
+    global_map: Out[PointCloud2]
 
 
 class GlobalMap(Protocol):

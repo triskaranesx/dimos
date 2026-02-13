@@ -96,7 +96,6 @@ all_modules = {
     "human_input": "dimos.agents.cli.human",
     "joint_trajectory_controller": "dimos.manipulation.control.trajectory_controller.joint_trajectory_controller",
     "keyboard_teleop": "dimos.robot.unitree.keyboard_teleop",
-    "lidar_module": "dimos.hardware.sensors.lidar.module",
     "llm_agent": "dimos.agents.agent",
     "manipulation_module": "dimos.manipulation.manipulation_module",
     "mapper": "dimos.robot.unitree.type.map",

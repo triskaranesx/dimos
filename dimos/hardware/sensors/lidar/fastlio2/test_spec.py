@@ -17,13 +17,11 @@
 from __future__ import annotations
 
 from dimos.hardware.sensors.lidar.fastlio2.module import FastLio2
+from dimos.spec import mapping, perception
+from dimos.spec.utils import assert_implements_protocol
 
 
-def test_fastlio2_has_lidar_port() -> None:
-    hints = FastLio2.__annotations__
-    assert "lidar" in hints
-
-
-def test_fastlio2_has_odometry_port() -> None:
-    hints = FastLio2.__annotations__
-    assert "odometry" in hints
+def test_fastlio2_implements_spec() -> None:
+    assert_implements_protocol(FastLio2, perception.Lidar)
+    assert_implements_protocol(FastLio2, perception.Odometry)
+    assert_implements_protocol(FastLio2, mapping.GlobalPointcloud)

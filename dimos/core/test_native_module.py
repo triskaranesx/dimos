@@ -136,6 +136,7 @@ def test_manual(dimos_cluster, args_file) -> None:
     }
 
 
+@pytest.mark.heavy
 def test_autoconnect(args_file) -> None:
     """autoconnect passes correct topic args to the native subprocess."""
     blueprint = autoconnect(

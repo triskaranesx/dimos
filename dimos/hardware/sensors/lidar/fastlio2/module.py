@@ -37,6 +37,7 @@ from dimos.core import Out  # noqa: TC001
 from dimos.core.native_module import NativeModule, NativeModuleConfig
 from dimos.msgs.nav_msgs.Odometry import Odometry  # noqa: TC001
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2  # noqa: TC001
+from dimos.spec import mapping, perception
 
 _DEFAULT_EXECUTABLE = str(Path(__file__).parent / "cpp" / "result" / "bin" / "fastlio2_native")
 _CONFIG_DIR = Path(__file__).parent / "config"
@@ -105,7 +106,7 @@ class FastLio2Config(NativeModuleConfig):
             self.config_path = str(path.resolve())
 
 
-class FastLio2(NativeModule):
+class FastLio2(NativeModule, perception.Lidar, perception.Odometry, mapping.GlobalPointcloud):
     """FAST-LIO2 SLAM module with integrated Livox Mid-360 driver.
 
     Ports:

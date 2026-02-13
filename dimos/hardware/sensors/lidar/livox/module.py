@@ -14,12 +14,7 @@
 
 """Python NativeModule wrapper for the C++ Livox Mid-360 driver.
 
-Declares the same ports as LivoxLidarModule (pointcloud, imu) but delegates
-all real work to the ``mid360_native`` C++ binary, which talks directly to
-the Livox SDK2 C API and publishes on LCM.
-
 Usage::
-
     from dimos.hardware.sensors.lidar.livox.module import Mid360
     from dimos.core.blueprints import autoconnect
 
@@ -72,7 +67,7 @@ class Mid360(NativeModule, perception.Lidar, perception.IMU):
     """Livox Mid-360 LiDAR module backed by a native C++ binary.
 
     Ports:
-        pointcloud (Out[PointCloud2]): Point cloud frames at configured frequency.
+        lidar (Out[PointCloud2]): Point cloud frames at configured frequency.
         imu (Out[Imu]): IMU data at ~200 Hz (if enabled).
     """
 
