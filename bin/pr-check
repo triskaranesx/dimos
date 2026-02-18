@@ -1,52 +1,99 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 
-set -euo pipefail
+from __future__ import annotations
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+import os
+from pathlib import Path
+import subprocess
 
-bin/pr-name-check
+repo_root = Path(__file__).resolve().parent.parent
+os.chdir(repo_root)
 
-if git show-ref --verify --quiet refs/heads/dev; then
-  base_ref="dev"
-elif git show-ref --verify --quiet refs/remotes/origin/dev; then
-  base_ref="origin/dev"
-else
-  echo "Could not find 'dev' or 'origin/dev' to compare changes against."
-  exit 1
-fi
 
-declare -A changed_files_map=()
+def main() -> int:
+    # 1. name check
+    subprocess.run(["bin/pr-name-check"], check=True, text=True)
 
-while IFS= read -r file; do
-  [[ -n "$file" ]] && changed_files_map["$file"]=1
-done < <(git diff --name-only "$base_ref...HEAD")
+    # 2. check if only markdown changes
+    changed_files = get_changed_files()
+    for each in changed_files:
+        print(f"Changed file: {each}")
+    if all(changed_file.endswith(".md") for changed_file in changed_files):
+        print("All detected changes are Markdown files; just running doc tests.")
+        subprocess.run(
+            ["python", "-m", "dimos.utils.docs.doclinks", "docs/"], check=True, text=True
+        )
+        return 0
 
-while IFS= read -r file; do
-  [[ -n "$file" ]] && changed_files_map["$file"]=1
-done < <(git diff --name-only)
+    # 3. run ci checks (uv install, mypy, ruff, pytest)
+    return subprocess.run(["bin/ci-fast"], text=True).returncode
 
-while IFS= read -r file; do
-  [[ -n "$file" ]] && changed_files_map["$file"]=1
-done < <(git diff --name-only --cached)
 
-while IFS= read -r file; do
-  [[ -n "$file" ]] && changed_files_map["$file"]=1
-done < <(git ls-files --others --exclude-standard)
+def get_changed_files() -> set[str]:
+    def has_ref(ref: str) -> bool:
+        result = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", ref],
+            text=True,
+            capture_output=True,
+        )
+        return result.returncode == 0
 
-if [[ "${#changed_files_map[@]}" -gt 0 ]]; then
-  all_md=1
-  for file in "${!changed_files_map[@]}"; do
-    if [[ "$file" != *.md ]]; then
-      all_md=0
-      break
-    fi
-  done
+    if has_ref("refs/heads/dev"):
+        base_ref = "dev"
+    elif has_ref("refs/remotes/origin/dev"):
+        base_ref = "origin/dev"
+    else:
+        print("Could not find 'dev' or 'origin/dev' to compare changes against.")
+        raise SystemExit(1)
 
-  if [[ "$all_md" -eq 1 ]]; then
-    echo "All detected changes are Markdown files; skipping bin/ci-fast."
-    exit 0
-  fi
-fi
+    changed_files: set[str] = set()
+    changed_files.update(
+        [
+            line
+            for line in subprocess.run(
+                ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+    )
+    changed_files.update(
+        [
+            line
+            for line in subprocess.run(
+                ["git", "diff", "--name-only"], check=True, text=True, capture_output=True
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+    )
+    changed_files.update(
+        [
+            line
+            for line in subprocess.run(
+                ["git", "diff", "--name-only", "--cached"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+    )
+    changed_files.update(
+        [
+            line
+            for line in subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.splitlines()
+            if line.strip()
+        ]
+    )
+    return changed_files
 
-bin/ci-fast
+
+if __name__ == "__main__":
+    raise SystemExit(main())
