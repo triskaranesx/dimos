@@ -1,8 +1,7 @@
 
 <div align="center">
 
-![Dimensional](assets/dimensional-dark.svg#gh-dark-mode-only)
-![Dimensional](assets/dimensional-light.svg#gh-light-mode-only)
+<img width="1000" alt="banner_bordered_trimmed" src="https://github.com/user-attachments/assets/15283d94-ad95-42c9-abd5-6565a222a837" />
 
 <h2>The Agentive Operating System for Generalist Robotics</h2>
 
@@ -108,7 +107,7 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
       🟥 <a href="dimos/robot/unitree/b1">Unitree B1</a><br>
     </td>
     <td align="center" width="20%">
-      🟥 <a href="docs/todo.md">Unitree G1</a><br>
+      🟨 <a href="docs/platforms/humanoid/g1/index.md">Unitree G1</a><br>
     </td>
     <td align="center" width="20%">
       🟥 <a href="docs/todo.md">Xarm</a><br>
@@ -131,7 +130,7 @@ Dimensional is agent native -- "vibecode" your robots in natural language and bu
 
 # Installation
 
-## Step 1: System Install
+## System Install
 
 To set up your system dependencies, follow one of these guides:
 
@@ -139,11 +138,13 @@ To set up your system dependencies, follow one of these guides:
 - 🟩 [NixOS / General Linux](docs/installation/nix.md)
 - 🟧 [macOS](docs/installation/osx.md)
 
-## Step 2: Python Installs
+## Python Install
 
 ### Quickstart
 
 ```bash
+uv venv --python "3.12"
+source .venv/bin/activate
 uv pip install dimos[base,unitree]
 
 # Replay a recorded Go2 session (no hardware needed)
@@ -156,7 +157,6 @@ dimos --replay run unitree-go2
 uv pip install dimos[base,unitree,sim]
 
 # Run Go2 in MuJoCo simulation
-export DISPLAY=:1 # Or DISPLAY=:0 if getting GLFW/OpenGL X11 errors
 dimos --simulation run unitree-go2
 
 # Run G1 humanoid in simulation
@@ -169,29 +169,75 @@ export ROBOT_IP=<YOUR_ROBOT_IP>
 dimos run unitree-go2
 ```
 
-### Develop on DimOS
+# Usage
 
-```sh
-export GIT_LFS_SKIP_SMUDGE=1
-git clone -b dev https://github.com/dimensionalOS/dimos.git
-cd dimos
+## Use DimOS as a Library
 
-uv venv --python 3.12
-source .venv/bin/activate
+See below a simple robot connection module that sends streams of continuous `cmd_vel` to the robot and receives `color_image` to a simple `Listener` module. DimOS Modules are subsystems on a robot that communicate with other modules using standardized messages.
 
-uv sync --all-extras
+```py
+import threading, time, numpy as np
+from dimos.core import In, Module, Out, rpc, autoconnect
+from dimos.msgs.geometry_msgs import Twist
+from dimos.msgs.sensor_msgs import Image, ImageFormat
 
-# Run full test suite
-uv run pytest dimos
+class RobotConnection(Module):
+    cmd_vel: In[Twist]
+    color_image: Out[Image]
+
+    @rpc
+    def start(self):
+        threading.Thread(target=self._image_loop, daemon=True).start()
+
+    def _image_loop(self):
+        while True:
+            img = Image.from_numpy(
+                np.zeros((120, 160, 3), np.uint8),
+                format=ImageFormat.RGB,
+                frame_id="camera_optical",
+            )
+            self.color_image.publish(img)
+            time.sleep(0.2)
+
+class Listener(Module):
+    color_image: In[Image]
+
+    @rpc
+    def start(self):
+        self.color_image.subscribe(lambda img: print(f"image {img.width}x{img.height}"))
+
+if __name__ == "__main__":
+    autoconnect(
+        RobotConnection.blueprint(),
+        Listener.blueprint(),
+    ).build().loop()
 ```
 
-### Step 3 - Profit
+## Blueprints
 
-<img src="assets/readme/dimos_demo.gif" alt="DimOS Demo" width="100%">
+Blueprints are instructions for how to construct and wire modules. We compose them with
+`autoconnect(...)`, which connects streams by `(name, type)` and returns a `Blueprint`.
 
-# Development
+Blueprints can be composed, remapped, and have transports overridden if `autoconnect()` fails due to conflicting variable names or `In[]` and `Out[]` message types.
 
-## API
+A blueprint example that connects the image stream from a robot to an LLM Agent for reasoning and action execution.
+```py
+from dimos.core import autoconnect, LCMTransport
+from dimos.msgs.sensor_msgs import Image
+from dimos.robot.unitree.go2.connection import go2_connection
+from dimos.agents.agent import agent
+
+blueprint = autoconnect(
+    go2_connection(),
+    agent(),
+).transports({("color_image", Image): LCMTransport("/color_image", Image)})
+
+# Run the blueprint
+if __name__ == "__main__":
+    blueprint.build().loop()
+```
+
+## Library API
 
 - [Modules](docs/usage/modules.md)
 - [LCM](docs/usage/lcm.md)
@@ -200,6 +246,25 @@ uv run pytest dimos
 - [Data Streams](docs/usage/data_streams/README.md)
 - [Configuration](docs/usage/configuration.md)
 - [Visualization](docs/usage/visualization.md)
+
+## Demos
+
+<img src="assets/readme/dimos_demo.gif" alt="DimOS Demo" width="100%">
+
+# Development
+
+## Develop on DimOS
+
+```sh
+export GIT_LFS_SKIP_SMUDGE=1
+git clone -b dev https://github.com/dimensionalOS/dimos.git
+cd dimos
+
+uv sync --all-extras --no-extra dds
+
+# Run fast test suite
+uv run pytest dimos
+```
 
 ## Multi Language Support
 
