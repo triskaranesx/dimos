@@ -62,13 +62,14 @@ except ModuleNotFoundError:
     ROSInt8 = _Stub  # type: ignore[assignment]
     ROSTFMessage = _Stub  # type: ignore[assignment]
 
-from reactivex import operators as ops
-from reactivex.subject import Subject
-
 from dimos import spec
 from dimos.agents.annotation import skill
-from dimos.core import DimosCluster, In, LCMTransport, Module, Out, pSHMTransport, rpc
+from dimos.core.core import rpc
 from dimos.core.docker_runner import DockerModuleConfig
+from dimos.core.module import Module
+from dimos.core.module_coordinator import ModuleCoordinator
+from dimos.core.stream import In, Out
+from dimos.core.transport import LCMTransport
 from dimos.msgs.geometry_msgs import (
     PoseStamped,
     Quaternion,
@@ -171,16 +172,19 @@ class ROSNavConfig(DockerModuleConfig):
 
         repo_root = Path(__file__).parent.parent.parent
         self.docker_volumes += [
+            # X11 socket for display forwarding (RViz, Unity)
+            ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw"),
             # Mount live dimos source so the module is always up-to-date
             (str(repo_root), "/workspace/dimos", "rw"),
+            # Mount DDS config (fastdds.xml) from host
+            (str(repo_root / "docker" / "navigation" / "config"), "/ros2_ws/config", "rw"),
+            # Note: most of the mounts below are only needed for development
             # Mount entrypoint script so changes don't require a rebuild
             (
                 str(Path(__file__).parent / "dimos_module_entrypoint.sh"),
                 "/usr/local/bin/dimos_module_entrypoint.sh",
                 "ro",
             ),
-            # Mount DDS config (fastdds.xml) from host — matches docker-compose ./config mount
-            (str(repo_root / "docker" / "navigation" / "config"), "/ros2_ws/config", "rw"),
             # Mount Unity environment (map.pwly, traversable_area.ply, etc.) into the ROS workspace
             (
                 str(
@@ -197,6 +201,8 @@ class ROSNavConfig(DockerModuleConfig):
                 "/ros2_ws/src/ros-navigation-autonomy-stack/src/base_autonomy/vehicle_simulator/mesh/unity/",
                 "rw",
             ),
+            # the original codebase doesn't have this and the bagfile case complains about it being missing
+            # so we just put the unity one in there as "real_world"
             (
                 str(
                     repo_root
@@ -205,12 +211,13 @@ class ROSNavConfig(DockerModuleConfig):
                     / "ros-navigation-autonomy-stack"
                     / "src"
                     / "base_autonomy"
+                    / "vehicle_simulator"
+                    / "mesh"
+                    / "unity"
                 ),
-                "/ros2_ws/src/base_autonomy/",
+                "/ros2_ws/src/ros-navigation-autonomy-stack/src/base_autonomy/vehicle_simulator/mesh/real_world/",
                 "rw",
             ),
-            # X11 socket for display forwarding (RViz, Unity)
-            ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw"),
             # Patch ros_tcp_endpoint server.py: fixes JSON null-terminator stripping bug
             # that crashes every Unity TCP connection. The installed copy is pre-built into
             # the image; mounting the fixed source over it avoids a full rebuild.
@@ -255,10 +262,6 @@ class ROSNav(
     path_active: Out[NavPath]
     cmd_vel: Out[Twist]
 
-    # Using RxPY Subjects for reactive data flow instead of storing state
-    _local_pointcloud_subject: Subject  # type: ignore[type-arg]
-    _global_pointcloud_subject: Subject  # type: ignore[type-arg]
-
     _current_position_running: bool = False
     _spin_thread: threading.Thread | None = None
     _goal_reach: bool | None = None
@@ -274,10 +277,6 @@ class ROSNav(
         super().__init__(*args, **kwargs)
         import rclpy
         from rclpy.node import Node
-
-        # Initialize RxPY Subjects for streaming data
-        self._local_pointcloud_subject = Subject()
-        self._global_pointcloud_subject = Subject()
 
         # Initialize state tracking
         self._state_lock = threading.Lock()
@@ -327,26 +326,6 @@ class ROSNav(
     def start(self) -> None:
         self._running = True
 
-        self._disposables.add(
-            self._local_pointcloud_subject.pipe(
-                ops.sample(1.0 / self.config.local_pointcloud_freq),
-                ops.map(lambda msg: _pc2_from_ros(msg)),  # type: ignore[arg-type]
-            ).subscribe(
-                on_next=self.pointcloud.publish,
-                on_error=lambda e: logger.error(f"Lidar stream error: {e}"),
-            )
-        )
-
-        self._disposables.add(
-            self._global_pointcloud_subject.pipe(
-                ops.sample(1.0 / self.config.global_map_freq),
-                ops.map(lambda msg: _pc2_from_ros(msg)),  # type: ignore[arg-type]
-            ).subscribe(
-                on_next=self.global_pointcloud.publish,
-                on_error=lambda e: logger.error(f"Map stream error: {e}"),
-            )
-        )
-
         # Create and start the spin thread for ROS2 node spinning
         self._spin_thread = threading.Thread(
             target=self._spin_node, daemon=True, name="ROS2SpinThread"
@@ -355,7 +334,7 @@ class ROSNav(
 
         # if self.goal_req:
         #     self.goal_req.subscribe(self._on_goal_pose)
-        logger.info("NavigationModule started with ROS2 spinning and RxPY streams")
+        logger.info("NavigationModule started with ROS2 spinning")
 
     def _spin_node(self) -> None:
         import rclpy
@@ -387,10 +366,10 @@ class ROSNav(
         self.cmd_vel.publish(_twist_from_ros(msg.twist))
 
     def _on_ros_registered_scan(self, msg: ROSPointCloud2) -> None:
-        self._local_pointcloud_subject.on_next(msg)
+        self.pointcloud.publish(_pc2_from_ros(msg))
 
     def _on_ros_global_map(self, msg: ROSPointCloud2) -> None:
-        self._global_pointcloud_subject.on_next(msg)
+        self.global_pointcloud.publish(_pc2_from_ros(msg))
 
     def _on_ros_path(self, msg: ROSPath) -> None:
         dimos_path = _path_from_ros(msg)
@@ -617,9 +596,6 @@ class ROSNav(
         try:
             self._running = False
 
-            self._local_pointcloud_subject.on_completed()
-            self._global_pointcloud_subject.on_completed()
-
             if self._spin_thread and self._spin_thread.is_alive():
                 self._spin_thread.join(timeout=1.0)
 
@@ -635,11 +611,12 @@ class ROSNav(
 ros_nav = ROSNav.blueprint
 
 
-def deploy(dimos: DimosCluster):  # type: ignore[no-untyped-def]
+def deploy(dimos: ModuleCoordinator):  # type: ignore[no-untyped-def]
     nav = dimos.deploy(ROSNav)  # type: ignore[attr-defined]
 
-    nav.pointcloud.transport = pSHMTransport("/lidar")
-    nav.global_pointcloud.transport = pSHMTransport("/map")
+    # Existing ports on LCM transports
+    nav.pointcloud.transport = LCMTransport("/lidar", PointCloud2)
+    nav.global_pointcloud.transport = LCMTransport("/map", PointCloud2)
     nav.goal_req.transport = LCMTransport("/goal_req", PoseStamped)
     nav.goal_active.transport = LCMTransport("/goal_active", PoseStamped)
     nav.path_active.transport = LCMTransport("/path_active", NavPath)
