@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/dimos",
+  "version": "0.0.1",
+  "description": "Exposes dimos MCP tools to the OpenClaw agent",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {},
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
