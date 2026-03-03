@@ -176,8 +176,8 @@ def test_collect_stats(create_worker_manager):
     from dimos.core.resource_monitor.monitor import StatsMonitor
 
     manager = create_worker_manager(n_workers=2)
-    module1 = manager.deploy(SimpleModule)
-    module2 = manager.deploy(AnotherModule)
+    module1 = manager.deploy(SimpleModule, global_config, {})
+    module2 = manager.deploy(AnotherModule, global_config, {})
     module1.start()
     module2.start()
 
