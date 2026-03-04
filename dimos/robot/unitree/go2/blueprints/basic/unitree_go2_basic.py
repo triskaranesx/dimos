@@ -138,18 +138,28 @@ unitree_go2_basic = make_unitree_go2_basic()
 def make_unitree_go2_fleet(ips: list[str]) -> Blueprint:
     """Create a Go2 fleet blueprint — same cmd_vel broadcast to all robots.
 
-    Video/odometry/lidar are published from the first robot only.
+    Includes mapping (voxel + cost), path planning, and frontier exploration
+    just like the single-robot smart blueprint.
 
     Args:
         ips: List of robot IP addresses.
     """
+    from dimos.mapping.costmapper import cost_mapper
+    from dimos.mapping.voxels import voxel_mapper
+    from dimos.navigation.frontier_exploration import wavefront_frontier_explorer
+    from dimos.navigation.replanning_a_star.module import replanning_a_star_planner
+
     return (
         autoconnect(
             with_vis,
             go2_fleet_connection(ips=ips),
             websocket_vis(),
+            voxel_mapper(voxel_size=0.1),
+            cost_mapper(),
+            replanning_a_star_planner(),
+            wavefront_frontier_explorer(),
         )
-        .global_config(n_workers=4, robot_model="unitree_go2")
+        .global_config(n_workers=6, robot_model="unitree_go2")
         .configurators(ClockSyncConfigurator())
     )
 

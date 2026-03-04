@@ -82,7 +82,7 @@ def _camera_info_static() -> CameraInfo:
 
 
 class ReplayConnection(UnitreeWebRTCConnection):
-    dir_name = "unitree_go2_bigoffice"
+    dir_name = "go2_sf_office_4"
 
     # we don't want UnitreeWebRTCConnection to init
     def __init__(  # type: ignore[no-untyped-def]
@@ -206,6 +206,7 @@ class GO2Connection(Module, spec.Camera, spec.Pointcloud):
 
         video_store: TimedSensorStorage = TimedSensorStorage(f"{recording_name}/video")  # type: ignore[type-arg]
         video_store.consume_stream(self.connection.video_stream())
+        # video_store.consume_stream(self.connection.video_stream().pipe(ops.sample(0.5)))
 
     @rpc
     def start(self) -> None:
@@ -231,7 +232,7 @@ class GO2Connection(Module, spec.Camera, spec.Pointcloud):
         self.standup()
         time.sleep(3)
         self.connection.balance_stand()
-        # self.record("go2_bigoffice")
+        # self.record("go2_sf_office_4")
 
     @rpc
     def stop(self) -> None:

@@ -21,10 +21,11 @@ are published from the primary (first) robot only.
 from __future__ import annotations
 
 import logging
-import time
 from threading import Thread
+import time
 
 from reactivex.disposable import Disposable
+from unitree_webrtc_connect.constants import RTC_TOPIC
 
 from dimos import spec
 from dimos.core.core import rpc
@@ -108,9 +109,7 @@ class Go2FleetConnection(Module, spec.Camera, spec.Pointcloud):
         self._disposables.add(primary.video_stream().subscribe(onimage))
         self._disposables.add(Disposable(self.cmd_vel.subscribe(self._broadcast_move)))
 
-        self._camera_info_thread = Thread(
-            target=self._publish_camera_info, daemon=True
-        )
+        self._camera_info_thread = Thread(target=self._publish_camera_info, daemon=True)
         self._camera_info_thread.start()
 
         for conn in self._connections:
@@ -118,6 +117,17 @@ class Go2FleetConnection(Module, spec.Camera, spec.Pointcloud):
         time.sleep(3)
         for conn in self._connections:
             conn.balance_stand()
+
+        # Disable built-in obstacle avoidance on all robots
+        for conn in self._connections:
+            try:
+                conn.publish_request(
+                    RTC_TOPIC["OBSTACLES_AVOID"],
+                    {"api_id": 1001, "parameter": {"enable": 0}},
+                )
+                logger.info("Disabled obstacle avoidance on %s", conn)
+            except Exception as e:
+                logger.warning("Failed to disable obstacle avoidance: %s", e)
 
     @rpc
     def stop(self) -> None:
@@ -143,9 +153,7 @@ class Go2FleetConnection(Module, spec.Camera, spec.Pointcloud):
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
-        return all(
-            conn.move(twist, duration) for conn in self._connections
-        )
+        return all(conn.move(twist, duration) for conn in self._connections)
 
     @rpc
     def standup(self) -> bool:

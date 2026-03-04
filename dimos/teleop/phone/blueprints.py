@@ -41,7 +41,13 @@ make_phone_go2_teleop = autoconnect(
 
 make_phone_go2_fleet_teleop = autoconnect(
     simple_phone_teleop_module(),
-    make_unitree_go2_fleet(ips=["10.0.0.209", "10.0.0.152"]),
+    make_unitree_go2_fleet(
+        ips=[
+            # "10.0.0.209",
+            # "10.0.0.102",
+            "10.0.0.152",  # old ones
+        ]
+    ),
 )
 
 
