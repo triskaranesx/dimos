@@ -362,7 +362,12 @@ class TransformStream(Stream[R]):
             self._transformer.process(self._source, collector)
         return collector.results
 
-    def store(self, name: str | None = None, session: Session | None = None) -> Stream[R]:
+    def store(
+        self,
+        name: str | None = None,
+        payload_type: type | None = None,
+        session: Session | None = None,
+    ) -> Stream[R]:
         resolved = session or self._source._session
         if resolved is None:
             raise TypeError(
@@ -372,10 +377,12 @@ class TransformStream(Stream[R]):
             )
         if name is None:
             raise TypeError("store() requires a name for transform outputs")
+        resolved_type = payload_type or self._transformer.output_type
         return resolved.materialize_transform(
             name=name,
             source=self._source,
             transformer=self._transformer,
+            payload_type=resolved_type,
             live=self._live,
             backfill_only=self._backfill_only,
         )

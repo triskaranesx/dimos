@@ -34,6 +34,7 @@ class Transformer(ABC, Generic[T, R]):
 
     supports_backfill: bool = True
     supports_live: bool = True
+    output_type: type | None = None
 
     @abstractmethod
     def process(self, source: Stream[T], target: Stream[R]) -> None:
@@ -71,6 +72,76 @@ class PerItemTransformer(Transformer[T, R]):
             target.append(result, ts=obs.ts, pose=obs.pose, tags=obs.tags)
 
 
+class QualityWindowTransformer(Transformer[T, T]):
+    """Keeps the highest-quality item per time window.
+
+    Like ``sharpness_barrier`` but operates on stored data (no wall-clock dependency).
+    In live mode, buffers the current window and emits the best item when a new
+    observation falls outside the window.
+    """
+
+    supports_backfill: bool = True
+    supports_live: bool = True
+
+    def __init__(self, quality_fn: Callable[[T], float], window: float = 0.5) -> None:
+        self._quality_fn = quality_fn
+        self._window = window
+        # Live state
+        self._window_start: float | None = None
+        self._best_obs: Observation | None = None
+        self._best_score: float = -1.0
+
+    def process(self, source: Stream[T], target: Stream[T]) -> None:
+        window_start: float | None = None
+        best_obs: Observation | None = None
+        best_score: float = -1.0
+
+        for obs in source:
+            ts = obs.ts or 0.0
+            if window_start is None:
+                window_start = ts
+
+            if (ts - window_start) >= self._window:
+                if best_obs is not None:
+                    target.append(
+                        best_obs.data, ts=best_obs.ts, pose=best_obs.pose, tags=best_obs.tags
+                    )
+                window_start = ts
+                best_score = -1.0
+                best_obs = None
+
+            score = self._quality_fn(obs.data)
+            if score > best_score:
+                best_score = score
+                best_obs = obs
+
+        if best_obs is not None:
+            target.append(best_obs.data, ts=best_obs.ts, pose=best_obs.pose, tags=best_obs.tags)
+
+    def on_append(self, obs: Observation, target: Stream[T]) -> None:
+        ts = obs.ts or 0.0
+
+        if self._window_start is None:
+            self._window_start = ts
+
+        if (ts - self._window_start) >= self._window:
+            if self._best_obs is not None:
+                target.append(
+                    self._best_obs.data,
+                    ts=self._best_obs.ts,
+                    pose=self._best_obs.pose,
+                    tags=self._best_obs.tags,
+                )
+            self._window_start = ts
+            self._best_score = -1.0
+            self._best_obs = None
+
+        score = self._quality_fn(obs.data)
+        if score > self._best_score:
+            self._best_score = score
+            self._best_obs = obs
+
+
 class EmbeddingTransformer(Transformer[Any, "Embedding"]):
     """Wraps an EmbeddingModel as a Transformer that produces Embedding output.
 
@@ -81,7 +152,10 @@ class EmbeddingTransformer(Transformer[Any, "Embedding"]):
     supports_live: bool = True
 
     def __init__(self, model: EmbeddingModel) -> None:
+        from dimos.models.embedding.base import Embedding as EmbeddingCls
+
         self.model = model
+        self.output_type: type | None = EmbeddingCls
 
     def process(self, source: Stream[Any], target: Stream[Embedding]) -> None:
         for page in source.fetch_pages():

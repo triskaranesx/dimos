@@ -18,14 +18,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 
 from dimos.memory.impl.sqlite import SqliteSession, SqliteStore
+from dimos.memory.transformer import EmbeddingTransformer
+from dimos.memory.types import _UNSET, EmbeddingObservation
+from dimos.models.embedding.base import Embedding, EmbeddingModel
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.utils.testing import TimedSensorReplay
 
 if TYPE_CHECKING:
     from dimos.memory.types import Observation
+
+
+def _img_close(a: Image, b: Image, max_diff: float = 5.0) -> bool:
+    """Approximate Image equality (JPEG is lossy)."""
+    if a.data.shape != b.data.shape:
+        return False
+    if a.frame_id != b.frame_id:
+        return False
+    return float(np.abs(a.data.astype(np.float32) - b.data.astype(np.float32)).mean()) < max_diff
 
 
 @pytest.fixture(scope="module")
@@ -63,12 +76,12 @@ class TestStreamBasics:
         s = session.stream("images", Image)
         obs = s.append(images[0])
         assert obs.id == 1
-        assert obs.data == images[0]
+        assert obs.data == images[0]  # append returns original, not decoded
         assert obs.ts is not None
 
         rows = s.fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[0]
+        assert _img_close(rows[0].data, images[0])
         assert rows[0].id == 1
 
     def test_append_multiple(self, session: SqliteSession, images: list[Image]) -> None:
@@ -78,7 +91,7 @@ class TestStreamBasics:
 
         assert s.count() == 3
         rows = s.fetch()
-        assert [r.data for r in rows] == images[:3]
+        assert all(_img_close(r.data, img) for r, img in zip(rows, images[:3], strict=True))
 
     def test_append_with_tags(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("images", Image)
@@ -94,7 +107,7 @@ class TestStreamBasics:
         s.append(images[2], ts=3.0)
 
         obs = s.last()
-        assert obs.data == images[2]
+        assert _img_close(obs.data, images[2])
         assert obs.ts == 3.0
 
     def test_one(self, session: SqliteSession, images: list[Image]) -> None:
@@ -102,7 +115,7 @@ class TestStreamBasics:
         s.append(images[0])
 
         obs = s.one()
-        assert obs.data == images[0]
+        assert _img_close(obs.data, images[0])
 
     def test_one_empty_raises(self, session: SqliteSession) -> None:
         s = session.stream("images", Image)
@@ -118,7 +131,7 @@ class TestFilters:
 
         rows = s.after(5.0).fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[1]
+        assert _img_close(rows[0].data, images[1])
 
     def test_before(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -127,7 +140,7 @@ class TestFilters:
 
         rows = s.before(5.0).fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[0]
+        assert _img_close(rows[0].data, images[0])
 
     def test_time_range(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -137,7 +150,7 @@ class TestFilters:
 
         rows = s.time_range(3.0, 7.0).fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[1]
+        assert _img_close(rows[0].data, images[1])
 
     def test_at(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -147,7 +160,7 @@ class TestFilters:
 
         rows = s.at(5.5, tolerance=1.0).fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[1]
+        assert _img_close(rows[0].data, images[1])
 
     def test_filter_tags(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -156,7 +169,7 @@ class TestFilters:
 
         rows = s.filter_tags(cam="front").fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[0]
+        assert _img_close(rows[0].data, images[0])
 
     def test_chained_filters(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -166,7 +179,7 @@ class TestFilters:
 
         rows = s.after(3.0).filter_tags(cam="front").fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[1]
+        assert _img_close(rows[0].data, images[1])
 
 
 class TestOrdering:
@@ -177,7 +190,10 @@ class TestOrdering:
         s.append(images[2], ts=3.0)
 
         rows = s.order_by("ts").fetch()
-        assert [r.data for r in rows] == [images[0], images[1], images[2]]
+        assert all(
+            _img_close(r.data, img)
+            for r, img in zip(rows, [images[0], images[1], images[2]], strict=True)
+        )
 
     def test_order_by_desc(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -186,7 +202,10 @@ class TestOrdering:
         s.append(images[2], ts=3.0)
 
         rows = s.order_by("ts", desc=True).fetch()
-        assert [r.data for r in rows] == [images[2], images[1], images[0]]
+        assert all(
+            _img_close(r.data, img)
+            for r, img in zip(rows, [images[2], images[1], images[0]], strict=True)
+        )
 
     def test_limit_offset(self, session: SqliteSession, images: list[Image]) -> None:
         s = session.stream("data", Image)
@@ -195,7 +214,9 @@ class TestOrdering:
 
         rows = s.order_by("ts").limit(2).offset(1).fetch()
         assert len(rows) == 2
-        assert [r.data for r in rows] == [images[1], images[2]]
+        assert all(
+            _img_close(r.data, img) for r, img in zip(rows, [images[1], images[2]], strict=True)
+        )
 
 
 class TestFetchPages:
@@ -210,7 +231,7 @@ class TestFetchPages:
         assert len(pages[-1]) == 1
 
         all_items = [obs.data for page in pages for obs in page]
-        assert all_items == images
+        assert all(_img_close(a, b) for a, b in zip(all_items, images, strict=True))
 
 
 class TestTextStream:
@@ -230,6 +251,84 @@ class TestTextStream:
         rows = s.search_text("motor", k=10).fetch()
         assert len(rows) == 2
         assert all("Motor" in r.data for r in rows)
+
+
+class TestEmbeddingStream:
+    def test_create_and_append(self, session: SqliteSession) -> None:
+        es = session.embedding_stream("emb", vec_dimensions=4)
+        e1 = Embedding(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
+        e2 = Embedding(np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32))
+
+        es.append(e1, ts=1.0)
+        es.append(e2, ts=2.0)
+
+        assert es.count() == 2
+
+    def test_search_embedding(self, session: SqliteSession) -> None:
+        es = session.embedding_stream("emb_search", vec_dimensions=4)
+        vecs = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+        for i, v in enumerate(vecs):
+            es.append(Embedding(np.array(v, dtype=np.float32)), ts=float(i))
+
+        # Search for vector closest to [1, 0, 0, 0] — should get id=1 and id=3
+        results = es.search_embedding([1.0, 0.0, 0.0, 0.0], k=2).fetch()
+        assert len(results) == 2
+        result_ids = {r.id for r in results}
+        assert 1 in result_ids  # exact match
+        assert 3 in result_ids  # [0.9, 0.1, 0, 0] is close
+
+    def test_search_returns_embedding_observation(self, session: SqliteSession) -> None:
+        es = session.embedding_stream("emb_obs", vec_dimensions=3)
+        es.append(Embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)), ts=1.0)
+
+        results = es.search_embedding([1.0, 0.0, 0.0], k=1).fetch()
+        assert len(results) == 1
+        assert isinstance(results[0], EmbeddingObservation)
+
+    def test_search_with_time_filter(self, session: SqliteSession) -> None:
+        es = session.embedding_stream("emb_time", vec_dimensions=3)
+        es.append(Embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)), ts=1.0)
+        es.append(Embedding(np.array([1.0, 0.0, 0.0], dtype=np.float32)), ts=10.0)
+
+        # Both match the vector, but only one is after t=5
+        results = es.search_embedding([1.0, 0.0, 0.0], k=10).after(5.0).fetch()
+        assert len(results) == 1
+        assert results[0].ts == 10.0
+
+    def test_embedding_transformer_store(self, session: SqliteSession, images: list[Image]) -> None:
+        """Test the full pipeline: images → EmbeddingTransformer → EmbeddingStream."""
+
+        class FakeEmbedder(EmbeddingModel):
+            device = "cpu"
+
+            def embed(self, *imgs: Image) -> Embedding | list[Embedding]:  # type: ignore[override]
+                # Return a fake embedding based on mean pixel value
+                results = []
+                for img in imgs:
+                    val = float(img.data.mean()) / 255.0
+                    results.append(
+                        Embedding(np.array([val, 1.0 - val, 0.0, 0.0], dtype=np.float32))
+                    )
+                return results if len(results) > 1 else results[0]
+
+            def embed_text(self, *texts: str) -> Embedding | list[Embedding]:
+                raise NotImplementedError
+
+        s = session.stream("cam_emb", Image)
+        s.append(images[0], ts=1.0)
+        s.append(images[1], ts=2.0)
+
+        emb_stream = s.transform(EmbeddingTransformer(FakeEmbedder())).store("cam_embeddings")
+        assert emb_stream.count() == 2
+
+        # Search by vector
+        results = emb_stream.search_embedding([0.5, 0.5, 0.0, 0.0], k=1).fetch()
+        assert len(results) == 1
 
 
 class TestListStreams:
@@ -255,8 +354,8 @@ class TestReactive:
         s.append(images[1])
 
         assert len(received) == 2
-        assert received[0].data == images[0]
-        assert received[1].data == images[1]
+        assert received[0].data is images[0]  # appended obs holds original
+        assert received[1].data is images[1]
 
 
 class TestTransformInMemory:
@@ -298,7 +397,7 @@ class TestTransformStore:
         s.append(images[0], ts=1.0)
         s.append(images[1], ts=2.0)
 
-        stored = s.transform(lambda im: f"{im.width}x{im.height}").store("shapes")
+        stored = s.transform(lambda im: f"{im.width}x{im.height}").store("shapes", str)
         rows = stored.fetch()
         assert len(rows) == 2
         expected = f"{images[0].width}x{images[0].height}"
@@ -311,7 +410,7 @@ class TestTransformStore:
         s = session.stream("data", Image)
         s.append(images[0], ts=1.0)
 
-        stored = s.transform(lambda im: im.height, live=True).store("heights")
+        stored = s.transform(lambda im: im.height, live=True).store("heights", int)
         assert stored.count() == 0  # no backfill
 
         s.append(images[1], ts=2.0)
@@ -324,7 +423,7 @@ class TestTransformStore:
         s = session.stream("data", Image)
         s.append(images[0], ts=1.0)
 
-        stored = s.transform(lambda im: im.height, backfill_only=True).store("heights_bo")
+        stored = s.transform(lambda im: im.height, backfill_only=True).store("heights_bo", int)
         assert stored.count() == 1
         assert stored.one().data == images[0].height
 
@@ -340,12 +439,11 @@ class TestLazyData:
 
         rows = s.fetch()
         obs = rows[0]
-        from dimos.memory.types import _UNSET
-
         assert obs._data is _UNSET
         assert obs._data_loader is not None
-        assert obs.data == images[0]
-        assert obs._data == images[0]
+        loaded = obs.data
+        assert _img_close(loaded, images[0])
+        assert obs._data is loaded  # cached after first access
 
     def test_metadata_without_payload(self, session: SqliteSession, images: list[Image]) -> None:
         """Metadata (ts, tags) should be available without loading payload."""
@@ -366,7 +464,7 @@ class TestIteration:
             s.append(img, ts=float(i))
 
         items = [obs.data for obs in s]
-        assert items == images[:3]
+        assert all(_img_close(a, b) for a, b in zip(items, images[:3], strict=True))
 
 
 class TestStoreReopen:
@@ -386,6 +484,6 @@ class TestStoreReopen:
         s2 = store2.session()
         rows = s2.stream("data", Image).fetch()
         assert len(rows) == 1
-        assert rows[0].data == images[0]
+        assert _img_close(rows[0].data, images[0])
         s2.close()
         store2.close()

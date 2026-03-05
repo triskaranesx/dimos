@@ -69,6 +69,7 @@ class Session(ABC):
         source: Stream[Any],
         transformer: Transformer[Any, Any],
         *,
+        payload_type: type | None = None,
         live: bool = False,
         backfill_only: bool = False,
     ) -> Stream[Any]:

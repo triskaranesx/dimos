@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from reactivex.subject import Subject
 
 from dimos.memory.codec import (
+    JpegCodec,
     LcmCodec,
     PickleCodec,
     codec_for_type,
@@ -289,7 +290,7 @@ class SqliteStreamBackend:
         table: str,
         *,
         pose_provider: PoseProvider | None = None,
-        codec: LcmCodec | PickleCodec | None = None,
+        codec: LcmCodec | JpegCodec | PickleCodec | None = None,
     ) -> None:
         self._conn = conn
         self._table = table
@@ -413,7 +414,7 @@ class SqliteEmbeddingBackend(SqliteStreamBackend):
         vec_dimensions: int | None = None,
         pose_provider: PoseProvider | None = None,
         parent_table: str | None = None,
-        codec: LcmCodec | PickleCodec | None = None,
+        codec: LcmCodec | JpegCodec | PickleCodec | None = None,
     ) -> None:
         super().__init__(conn, table, pose_provider=pose_provider, codec=codec)
         self._vec_dimensions = vec_dimensions
@@ -540,7 +541,7 @@ class SqliteTextBackend(SqliteStreamBackend):
         *,
         tokenizer: str = "unicode61",
         pose_provider: PoseProvider | None = None,
-        codec: LcmCodec | PickleCodec | None = None,
+        codec: LcmCodec | JpegCodec | PickleCodec | None = None,
     ) -> None:
         super().__init__(conn, table, pose_provider=pose_provider, codec=codec)
         self._tokenizer = tokenizer
@@ -652,6 +653,12 @@ class SqliteSession(Session):
         if payload_type is None:
             payload_type = self._resolve_payload_type(name)
 
+        if payload_type is None:
+            raise TypeError(
+                f"stream({name!r}): payload_type is required when creating a new stream. "
+                "Pass the type explicitly, e.g. session.stream('images', Image)."
+            )
+
         self._ensure_stream_tables(name)
         self._register_stream(name, payload_type, "stream")
 
@@ -736,14 +743,15 @@ class SqliteSession(Session):
         source: Stream[Any],
         transformer: Transformer[Any, Any],
         *,
+        payload_type: type | None = None,
         live: bool = False,
         backfill_only: bool = False,
     ) -> Stream[Any]:
         target: Stream[Any]
         if isinstance(transformer, EmbeddingTransformer):
-            target = self.embedding_stream(name)
+            target = self.embedding_stream(name, payload_type)
         else:
-            target = self.stream(name)
+            target = self.stream(name, payload_type)
 
         # Backfill existing data
         if transformer.supports_backfill and not live:
@@ -838,9 +846,20 @@ class SqliteStore(Store):
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._load_extensions()
 
     def session(self) -> SqliteSession:
         return SqliteSession(self._conn)
+
+    def _load_extensions(self) -> None:
+        try:
+            import sqlite_vec
+
+            self._conn.enable_load_extension(True)
+            sqlite_vec.load(self._conn)
+            self._conn.enable_load_extension(False)
+        except ImportError:
+            pass
 
     def close(self) -> None:
         self._conn.close()

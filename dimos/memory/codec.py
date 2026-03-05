@@ -44,6 +44,46 @@ class LcmCodec:
         return self._msg_type.lcm_decode(data)
 
 
+class JpegCodec:
+    """Codec for Image types — stores as JPEG bytes (lossy, ~10-20x smaller).
+
+    Preserves ``frame_id`` as a short header: ``<len_u16><frame_id_utf8><jpeg_bytes>``.
+    Pixel data is lossy-compressed; ``ts`` is NOT preserved (stored in the meta table).
+    """
+
+    def __init__(self, quality: int = 90) -> None:
+        self._quality = quality
+
+    def encode(self, value: Any) -> bytes:
+        import struct
+
+        import cv2
+
+        bgr = value.to_opencv()
+        ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
+        if not ok:
+            raise ValueError("JPEG encoding failed")
+        frame_id = (value.frame_id or "").encode("utf-8")
+        header = struct.pack("<H", len(frame_id)) + frame_id
+        return header + buf.tobytes()
+
+    def decode(self, data: bytes) -> Any:
+        import struct
+
+        import cv2
+        import numpy as np
+
+        from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+
+        fid_len = struct.unpack("<H", data[:2])[0]
+        frame_id = data[2 : 2 + fid_len].decode("utf-8")
+        jpeg_data = data[2 + fid_len :]
+        arr = cv2.imdecode(np.frombuffer(jpeg_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if arr is None:
+            raise ValueError("JPEG decoding failed")
+        return Image(data=arr, format=ImageFormat.BGR, frame_id=frame_id)
+
+
 class PickleCodec:
     """Fallback codec for arbitrary Python objects."""
 
@@ -66,14 +106,16 @@ def _pose_codec() -> LcmCodec:
     return _POSE_CODEC
 
 
-def codec_for_type(payload_type: type | None) -> LcmCodec | PickleCodec:
+def codec_for_type(payload_type: type | None) -> LcmCodec | JpegCodec | PickleCodec:
     """Auto-select codec based on payload type."""
-    if (
-        payload_type is not None
-        and hasattr(payload_type, "lcm_encode")
-        and hasattr(payload_type, "lcm_decode")
-    ):
-        return LcmCodec(payload_type)  # type: ignore[arg-type]
+    if payload_type is not None:
+        # Image → JPEG by default (much smaller than LCM raw pixels)
+        from dimos.msgs.sensor_msgs.Image import Image
+
+        if issubclass(payload_type, Image):
+            return JpegCodec()
+        if hasattr(payload_type, "lcm_encode") and hasattr(payload_type, "lcm_decode"):
+            return LcmCodec(payload_type)  # type: ignore[arg-type]
     return PickleCodec()
 
 
