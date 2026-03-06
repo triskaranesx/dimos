@@ -140,9 +140,7 @@ echo -e "${GREEN}Detected architecture: ${HOST_ARCH} → TARGETARCH=${TARGETARCH
 if ! docker compose version &>/dev/null; then
     echo -e "${YELLOW}Docker Compose not found — installing docker-compose-plugin...${NC}"
     sudo apt-get update -qq && sudo apt-get install -y docker-compose-v2 || sudo apt-get install -y docker-compose-plugin
-    if docker compose version &>/dev/null; then
-        COMPOSE_CMD="docker compose"
-    else
+    if ! docker compose version &>/dev/null; then
         echo -e "${RED}Error: Failed to install Docker Compose.${NC}"
         echo "Please install it manually: sudo apt-get install docker-compose-v2"
         echo "or follow https://docs.docker.com/compose/install/"
@@ -150,7 +148,6 @@ if ! docker compose version &>/dev/null; then
     fi
 fi
 
-echo "$COMPOSE_CMD" -f docker/navigation/docker-compose.yml build --build-arg TARGETARCH="$TARGETARCH"
 docker compose -f docker/navigation/docker-compose.yml build --build-arg TARGETARCH="$TARGETARCH"
 
 echo ""
