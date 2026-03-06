@@ -110,7 +110,11 @@ class DockerModuleConfig(ModuleConfig):
 def is_docker_module(module_class: type) -> bool:
     """Check if a module class should run in Docker based on its default_config."""
     default_config = getattr(module_class, "default_config", None)
-    return default_config is not None and issubclass(default_config, DockerModuleConfig)
+    return (
+        default_config is not None
+        and isinstance(default_config, type)
+        and issubclass(default_config, DockerModuleConfig)
+    )
 
 
 # Docker helpers
@@ -284,6 +288,7 @@ class DockerModule(ModuleProxyProtocol):
         """Gracefully stop the Docker container and clean up resources."""
         if not self._running:
             return
+        self._running = False  # claim shutdown before any side-effects
         with suppress(Exception):
             self.rpc.call_nowait(f"{self.remote_name}/stop", ([], {}))
         self._cleanup()

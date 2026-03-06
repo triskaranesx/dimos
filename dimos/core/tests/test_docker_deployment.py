@@ -139,10 +139,10 @@ class TestModuleCoordinatorDockerRouting:
 
         coordinator.stop()
 
-    @patch("dimos.core.docker_runner.DockerModule")
+    @patch("dimos.core.docker_worker_manager.DockerWorkerManager.deploy_parallel")
     @patch("dimos.core.module_coordinator.WorkerManager")
     def test_deploy_parallel_separates_docker_and_regular(
-        self, mock_worker_manager_cls, mock_docker_module_cls
+        self, mock_worker_manager_cls, mock_docker_deploy
     ):
         mock_worker_mgr = MagicMock()
         mock_worker_manager_cls.return_value = mock_worker_mgr
@@ -151,7 +151,7 @@ class TestModuleCoordinatorDockerRouting:
         mock_worker_mgr.deploy_parallel.return_value = [regular_proxy]
 
         mock_dm = MagicMock()
-        mock_docker_module_cls.return_value = mock_dm
+        mock_docker_deploy.return_value = [mock_dm]
 
         coordinator = ModuleCoordinator()
         coordinator.start()
@@ -164,8 +164,8 @@ class TestModuleCoordinatorDockerRouting:
 
         # Regular module goes through worker manager
         mock_worker_mgr.deploy_parallel.assert_called_once_with([(FakeRegularModule, (), {})])
-        # Docker module gets its own DockerModule
-        mock_docker_module_cls.assert_called_once_with(FakeDockerModule)
+        # Docker specs go through DockerWorkerManager
+        mock_docker_deploy.assert_called_once_with([(FakeDockerModule, (), {})])
         # start() is NOT called during deploy — it's called in start_all_modules
         mock_dm.start.assert_not_called()
 

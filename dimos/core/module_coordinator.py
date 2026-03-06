@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 from typing import TYPE_CHECKING, Any
 
+from dimos.core.docker_worker_manager import DockerWorkerManager
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.resource import Resource
 from dimos.core.worker_manager import WorkerManager
@@ -76,6 +77,7 @@ class ModuleCoordinator(Resource):  # type: ignore[misc]
         self._client.close_all()  # type: ignore[union-attr]
 
     def deploy(self, module_class: type[ModuleT], *args, **kwargs) -> ModuleProxy:  # type: ignore[no-untyped-def]
+        # Inline to avoid circular import: module_coordinator → docker_runner → module → blueprints → module_coordinator
         from dimos.core.docker_runner import DockerModule, is_docker_module
 
         if not self._client:
@@ -92,7 +94,8 @@ class ModuleCoordinator(Resource):  # type: ignore[misc]
     def deploy_parallel(
         self, module_specs: list[tuple[type[ModuleT], tuple[Any, ...], dict[str, Any]]]
     ) -> list[ModuleProxy]:
-        from dimos.core.docker_runner import DockerModule, is_docker_module
+        # Inline to avoid circular import: module_coordinator → docker_runner → module → blueprints → module_coordinator
+        from dimos.core.docker_runner import is_docker_module
 
         if not self._client:
             raise ValueError("Not started")
@@ -102,7 +105,6 @@ class ModuleCoordinator(Resource):  # type: ignore[misc]
         worker_indices: list[int] = []
         docker_specs: list[tuple[type[ModuleT], tuple[Any, ...], dict[str, Any]]] = []
         worker_specs: list[tuple[type[ModuleT], tuple[Any, ...], dict[str, Any]]] = []
-        # the i is needed for maintaining order on the returned output
         for i, spec in enumerate(module_specs):
             if is_docker_module(spec[0]):
                 docker_indices.append(i)
@@ -116,12 +118,7 @@ class ModuleCoordinator(Resource):  # type: ignore[misc]
         try:
             worker_results = self._client.deploy_parallel(worker_specs) if worker_specs else []
             if docker_specs:
-                with ThreadPoolExecutor(max_workers=len(docker_specs)) as executor:
-                    docker_results = list(
-                        executor.map(
-                            lambda spec: DockerModule(spec[0], *spec[1], **spec[2]), docker_specs
-                        )
-                    )
+                docker_results = DockerWorkerManager.deploy_parallel(docker_specs)
         finally:
             # Reassemble results in original input order
             results: list[Any] = [None] * len(module_specs)
