@@ -48,7 +48,7 @@ class RPCClient(Protocol):
     def call_sync(
         self, name: str, arguments: Args, rpc_timeout: float | None = 120.0
     ) -> tuple[Any, Callable[[], None]]:
-        if name == "start":
+        if name == "start" or name.endswith("/start"):
             rpc_timeout = 1200.0  # starting modules can take longer
         event = threading.Event()
 

@@ -409,10 +409,10 @@ class ROSNav(Module, NavigationInterface, spec.Nav, spec.LocalPlanner):
         self.cmd_vel.publish(_twist_from_ros(msg.twist))
 
     def _on_ros_registered_scan(self, msg: ROSPointCloud2) -> None:
-        self.lidar.publish(_pc2_from_ros(msg))
+        self.lidar.publish(_shift_pc2_z(_pc2_from_ros(msg)))
 
     def _on_ros_global_map(self, msg: ROSPointCloud2) -> None:
-        self.global_pointcloud.publish(_pc2_from_ros(msg))
+        self.global_pointcloud.publish(_shift_pc2_z(_pc2_from_ros(msg)))
 
     def _on_ros_overall_map(self, msg: ROSPointCloud2) -> None:
         # FIXME: disabling for now for perf onboard G1 (and cause we don't have an overall map rn)
@@ -701,6 +701,20 @@ def _image_from_ros_compressed(msg: "ROSCompressedImage") -> Image:
     if bgr is None:
         return Image(frame_id=frame_id, ts=ts)
     return Image(data=bgr, format=ImageFormat.BGR, frame_id=frame_id, ts=ts)
+
+
+def _shift_pc2_z(pc2: PointCloud2, z_offset: float=1.5) -> PointCloud2:
+    """Shift all points in a PointCloud2 by z_offset along the Z axis using open3d."""
+    import open3d.core as o3c
+
+    pcd_t = pc2._pcd_tensor
+    if "positions" not in pcd_t.point or len(pcd_t.point["positions"]) == 0:
+        return pc2
+    pts = pcd_t.point["positions"].numpy().copy()
+    pts[:, 2] += z_offset
+    shifted = pcd_t.clone()
+    shifted.point["positions"] = o3c.Tensor(pts, dtype=o3c.float32)
+    return PointCloud2(pointcloud=shifted, ts=pc2.ts, frame_id=pc2.frame_id)
 
 
 def _pc2_from_ros(msg: "ROSPointCloud2") -> PointCloud2:
