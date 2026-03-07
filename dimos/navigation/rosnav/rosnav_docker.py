@@ -359,7 +359,9 @@ class ROSNav(Module, NavigationInterface, spec.Nav, spec.LocalPlanner):
 
         self.path_sub = self._node.create_subscription(ROSPath, "/path", self._on_ros_path, 10)
         self.tf_sub = self._node.create_subscription(ROSTFMessage, "/tf", self._on_ros_tf, 10)
-        self.odom_sub = self._node.create_subscription(ROSOdometry, "/odom", self._on_ros_odom, 10)
+        self.odom_sub = self._node.create_subscription(
+            ROSOdometry, "/state_estimation", self._on_ros_odom, 10
+        )
 
         logger.info("NavigationModule initialized with ROS2 node")
 
