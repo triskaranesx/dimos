@@ -476,10 +476,16 @@ class SqliteStreamBackend:
         result = self._conn.execute(sql, params).fetchone()
         return result[0] if result else 0  # type: ignore[no-any-return]
 
+    def load_data(self, row_id: int) -> Any:
+        """Load payload by row ID from the database."""
+        r = self._conn.execute(
+            f"SELECT data FROM {self._table}_payload WHERE id = ?", (row_id,)
+        ).fetchone()
+        if r is None:
+            raise LookupError(f"No payload for id={row_id}")
+        return self._codec.decode(r[0])
+
     def _make_loader(self, row_id: int) -> Callable[[], Any]:
-        conn = self._conn
-        table = self._table
-        codec = self._codec
         owner_tid = threading.get_ident()
 
         def loader() -> Any:
@@ -489,10 +495,7 @@ class SqliteStreamBackend:
                     "fetched it. Access .data on the original thread first to cache it, "
                     "or use obs.load() before passing across threads."
                 )
-            r = conn.execute(f"SELECT data FROM {table}_payload WHERE id = ?", (row_id,)).fetchone()
-            if r is None:
-                raise LookupError(f"No payload for id={row_id}")
-            return codec.decode(r[0])
+            return self.load_data(row_id)
 
         return loader
 

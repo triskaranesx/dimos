@@ -77,6 +77,7 @@ class StreamBackend(Protocol):
         tags: dict[str, Any] | None,
         parent_id: int | None = None,
     ) -> Observation[Any]: ...
+    def load_data(self, row_id: int) -> Any: ...
     @property
     def appended_subject(self) -> Subject[Observation[Any]]: ...  # type: ignore[type-arg]
     @property
@@ -133,6 +134,13 @@ class Stream(Generic[T]):
                 "Operation requires a stored stream. Call .store() first or use session.stream()."
             )
         return self._backend
+
+    # ── Data loading ──────────────────────────────────────────────────
+
+    def load_data(self, obs: Observation[T]) -> T:
+        """Load payload for an observation. Thread-safe alternative to obs.data."""
+        backend = self._require_backend()
+        return cast("T", backend.load_data(obs.id))
 
     # ── Write ─────────────────────────────────────────────────────────
 
@@ -591,6 +599,12 @@ class ListBackend:
 
     def execute_count(self, query: StreamQuery) -> int:
         return len(self.execute_fetch(query))
+
+    def load_data(self, row_id: int) -> Any:
+        for obs in self._observations:
+            if obs.id == row_id:
+                return obs.data
+        raise LookupError(f"No observation with id={row_id}")
 
     def do_append(
         self,
