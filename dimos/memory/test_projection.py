@@ -127,12 +127,12 @@ def test_query_embeddings(session, clip):
     print(embeddings)
 
     # we can create captions on demand
-    florence = Florence2Model(detail=CaptionDetail.NORMAL)
+    florence = Florence2Model(detail=CaptionDetail.MORE_DETAILED)
     florence.start()
 
     caption_query = (
         session.streams.sharp_images.near(embeddings)
-        .limit(5)
+        .limit(2)
         .transform(CaptionTransformer(florence))
     )
     florence.stop()
@@ -150,7 +150,7 @@ def test_query_embeddings(session, clip):
         print(obs.id, obs.data)
 
     # we can also find all images ever captured near these embeddings (600+ frames)
-    images = session.streams.sharp_images.near(embeddings).fetch()
+    images = session.streams.color_image.near(embeddings).fetch()
 
     print(images)
 
@@ -213,17 +213,4 @@ def test_search_embeddings(session, clip):
     print(project)
 
     results = project.fetch()
-    print(results)
-    results = project.fetch()
-    print(results)
-    results = project.fetch()
-    print(results)
-    results = project.fetch()
-    print(results)
-    results = project.fetch()
-    print(results)
-    results = project.fetch()
-    print(results)
-    print(results)
-    print(results)
     print(results)
