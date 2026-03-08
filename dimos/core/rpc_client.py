@@ -38,7 +38,7 @@ class RpcCall:
         remote_name: str,
         unsub_fns: list,  # type: ignore[type-arg]
         stop_client: Callable[[], None] | None = None,
-        timeout: float,
+        timeout: float = 0,
     ) -> None:
         self._rpc = rpc
         self._name = name
