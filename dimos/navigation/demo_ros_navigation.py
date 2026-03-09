@@ -28,7 +28,7 @@ def main() -> None:
     dimos = ModuleCoordinator()
     dimos.start()
 
-    ros_nav = rosnav.deploy(dimos)
+    ros_nav = rosnav.deploy(dimos)  # type: ignore[attr-defined]
 
     logger.info("\nTesting navigation in 2 seconds...")
     time.sleep(2)

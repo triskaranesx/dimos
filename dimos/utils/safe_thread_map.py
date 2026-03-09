@@ -29,7 +29,7 @@ _NOISE_PATHS = (
 )
 
 
-def _strip_noise_frames(exc: BaseException) -> BaseException:
+def _strip_noise_frames(exc: Exception) -> Exception:
     """Strip concurrent.futures and safe_thread_map frames from the top of a traceback."""
     tb = exc.__traceback__
     while tb is not None and any(p in tb.tb_frame.f_code.co_filename for p in _NOISE_PATHS):
@@ -104,6 +104,6 @@ def safe_thread_map(
         if on_errors is not None:
             zipped = [(items[i], outcomes[i]) for i in range(len(items))]
             return on_errors(zipped, successes, errors)  # type: ignore[return-value, no-any-return]
-        raise ExceptionGroup("safe_thread_map failed", errors)
+        raise ExceptionGroup("safe_thread_map failed", errors)  # type: ignore[name-defined]
 
     return [outcomes[i] for i in range(len(items))]  # type: ignore[misc]

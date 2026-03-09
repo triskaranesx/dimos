@@ -23,16 +23,16 @@ import time
 from typing import Any
 
 from reactivex.disposable import Disposable
-from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (  # type: ignore[import-not-found]
     MotionSwitcherClient,
 )
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize
-from unitree_sdk2py.g1.loco.g1_loco_api import (
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize  # type: ignore[import-not-found]
+from unitree_sdk2py.g1.loco.g1_loco_api import (  # type: ignore[import-not-found]
     ROBOT_API_ID_LOCO_GET_BALANCE_MODE,
     ROBOT_API_ID_LOCO_GET_FSM_ID,
     ROBOT_API_ID_LOCO_GET_FSM_MODE,
 )
-from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient  # type: ignore[import-not-found]
 
 from dimos.agents.annotation import skill
 from dimos.core.core import rpc

@@ -117,12 +117,12 @@ class TestFsmState:
         assert issubclass(FsmState, IntEnum)
 
     def test_values(self) -> None:
-        assert FsmState.ZERO_TORQUE == 0
-        assert FsmState.DAMP == 1
-        assert FsmState.SIT == 3
-        assert FsmState.AI_MODE == 200
-        assert FsmState.LIE_TO_STANDUP == 702
-        assert FsmState.SQUAT_STANDUP_TOGGLE == 706
+        assert FsmState.ZERO_TORQUE == 0  # type: ignore[comparison-overlap]
+        assert FsmState.DAMP == 1  # type: ignore[comparison-overlap]
+        assert FsmState.SIT == 3  # type: ignore[comparison-overlap]
+        assert FsmState.AI_MODE == 200  # type: ignore[comparison-overlap]
+        assert FsmState.LIE_TO_STANDUP == 702  # type: ignore[comparison-overlap]
+        assert FsmState.SQUAT_STANDUP_TOGGLE == 706  # type: ignore[comparison-overlap]
 
     def test_name_lookup(self) -> None:
         assert FsmState(0).name == "ZERO_TORQUE"
@@ -131,8 +131,8 @@ class TestFsmState:
         assert FsmState(706).name == "SQUAT_STANDUP_TOGGLE"
 
     def test_int_comparison(self) -> None:
-        assert FsmState.DAMP == 1
-        assert FsmState.AI_MODE != 0
+        assert FsmState.DAMP == 1  # type: ignore[comparison-overlap]
+        assert FsmState.AI_MODE != 0  # type: ignore[comparison-overlap]
 
     def test_unknown_value_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -398,32 +398,32 @@ class TestWebRtcGetState:
 class TestWebRtcMove:
     def test_move_delegates(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.move.return_value = True
+        mod.connection.move.return_value = True  # type: ignore[union-attr]
         twist = Twist(linear=Vector3(1.0, 0, 0), angular=Vector3(0, 0, 0))
         assert mod.move(twist, duration=2.0) is True
-        mod.connection.move.assert_called_once_with(twist, 2.0)
+        mod.connection.move.assert_called_once_with(twist, 2.0)  # type: ignore[union-attr]
 
 
 class TestWebRtcStandUp:
     def test_stand_up_delegates(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.stand_up.return_value = True
+        mod.connection.standup.return_value = True  # type: ignore[union-attr]
         assert mod.stand_up() is True
-        mod.connection.stand_up.assert_called_once()
+        mod.connection.standup.assert_called_once()  # type: ignore[union-attr]
 
 
 class TestWebRtcLieDown:
     def test_lie_down_delegates(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.lie_down.return_value = True
+        mod.connection.liedown.return_value = True  # type: ignore[union-attr]
         assert mod.lie_down() is True
-        mod.connection.lie_down.assert_called_once()
+        mod.connection.liedown.assert_called_once()  # type: ignore[union-attr]
 
 
 class TestWebRtcPublishRequest:
     def test_delegates(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.publish_request.return_value = {"code": 0}
+        mod.connection.publish_request.return_value = {"code": 0}  # type: ignore[union-attr]
         result = mod.publish_request("topic", {"api_id": 7101})
         assert result == {"code": 0}
 
@@ -431,7 +431,7 @@ class TestWebRtcPublishRequest:
 class TestWebRtcArmCommand:
     def test_valid_command(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.publish_request.return_value = {"code": 0}
+        mod.connection.publish_request.return_value = {"code": 0}  # type: ignore[union-attr]
         result = mod.execute_arm_command("Handshake")
         assert "successfully" in result
 
@@ -444,7 +444,7 @@ class TestWebRtcArmCommand:
 class TestWebRtcModeCommand:
     def test_valid_command(self) -> None:
         mod = _make_webrtc_module()
-        mod.connection.publish_request.return_value = {"code": 0}
+        mod.connection.publish_request.return_value = {"code": 0}  # type: ignore[union-attr]
         result = mod.execute_mode_command("WalkMode")
         assert "successfully" in result
 

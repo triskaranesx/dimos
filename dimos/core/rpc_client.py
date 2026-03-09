@@ -69,8 +69,10 @@ class RpcCall:
             return None
 
         result, unsub_fn = self._rpc.call_sync(
-            f"{self._remote_name}/{self._name}", (args, kwargs), rpc_timeout=self._timeout
-        )  # type: ignore[arg-type]
+            f"{self._remote_name}/{self._name}",
+            (args, kwargs),  # type: ignore[arg-type]
+            rpc_timeout=self._timeout,
+        )
         self._unsub_fns.append(unsub_fn)
         return result
 

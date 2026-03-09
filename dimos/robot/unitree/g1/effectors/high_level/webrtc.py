@@ -98,6 +98,7 @@ class G1HighLevelWebRtc(Module, HighLevelG1Spec):
     @rpc
     def start(self) -> None:
         super().start()
+        assert self.config.ip is not None, "ip must be set in G1HighLevelWebRtcConfig"
         self.connection = UnitreeWebRTCConnection(self.config.ip, self.config.connection_mode)
         self.connection.start()
         self._disposables.add(Disposable(self.cmd_vel.subscribe(self.move)))
@@ -130,12 +131,12 @@ class G1HighLevelWebRtc(Module, HighLevelG1Spec):
     @rpc
     def stand_up(self) -> bool:
         assert self.connection is not None
-        return self.connection.stand_up()
+        return self.connection.standup()
 
     @rpc
     def lie_down(self) -> bool:
         assert self.connection is not None
-        return self.connection.lie_down()
+        return self.connection.liedown()
 
     # ----- skills (LLM-callable) -------------------------------------------
 
