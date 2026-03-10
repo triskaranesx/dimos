@@ -174,7 +174,7 @@ class ReplayConnection(UnitreeWebRTCConnection):
         return {"status": "ok", "message": "Fake publish"}
 
 
-_Config = TypeVar("_Config", bound=ConnectionConfig)
+_Config = TypeVar("_Config", bound=ConnectionConfig, default=ConnectionConfig)
 
 
 class GO2Connection(Module[_Config], spec.Camera, spec.Pointcloud):
