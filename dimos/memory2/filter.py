@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field, fields
 from itertools import islice
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -29,11 +30,16 @@ if TYPE_CHECKING:
 # ── Filter protocol ─────────────────────────────────────────────────
 
 
-@runtime_checkable
-class Filter(Protocol):
+@dataclass(frozen=True)
+class Filter(ABC):
     """Any object with a .matches(obs) -> bool method can be a filter."""
 
+    @abstractmethod
     def matches(self, obs: Observation[Any]) -> bool: ...
+
+    def __str__(self) -> str:
+        args = ", ".join(f"{f.name}={getattr(self, f.name)!r}" for f in fields(self))
+        return f"{self.__class__.__name__}({args})"
 
 
 # ── Concrete filters ────────────────────────────────────────────────
@@ -138,6 +144,22 @@ class StreamQuery:
     search_k: int | None = None
     # Full-text search (substring / FTS5)
     search_text: str | None = None
+
+    def __str__(self) -> str:
+        parts: list[str] = [str(f) for f in self.filters]
+        if self.search_text is not None:
+            parts.append(f"search({self.search_text!r})")
+        if self.search_vec is not None:
+            k = f", k={self.search_k}" if self.search_k is not None else ""
+            parts.append(f"vector_search({k.lstrip(', ')})" if k else "vector_search()")
+        if self.order_field:
+            direction = " DESC" if self.order_desc else ""
+            parts.append(f"order_by({self.order_field}{direction})")
+        if self.offset_val:
+            parts.append(f"offset({self.offset_val})")
+        if self.limit_val is not None:
+            parts.append(f"limit({self.limit_val})")
+        return " | ".join(parts)
 
     def apply(
         self, it: Iterator[Observation[Any]], *, live: bool = False

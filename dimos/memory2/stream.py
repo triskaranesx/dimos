@@ -36,6 +36,9 @@ from dimos.memory2.type import EmbeddedObservation, Observation
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+    import reactivex
+    from reactivex.abc import DisposableBase, ObserverBase
+
     from dimos.models.embedding.base import Embedding
 
 T = TypeVar("T")
@@ -60,6 +63,28 @@ class Stream(Generic[T]):
         self._source = source
         self._xf = xf
         self._query = query
+
+    def __str__(self) -> str:
+        # Walk the source chain to collect (xf, query) pairs
+        chain: list[tuple[Any, StreamQuery]] = []
+        current: Any = self
+        while isinstance(current, Stream):
+            chain.append((current._xf, current._query))
+            current = current._source
+        chain.reverse()  # innermost first
+
+        # current is the Backend
+        name = getattr(current, "name", "?")
+        result = f'Stream("{name}")'
+
+        for xf, query in chain:
+            if xf is not None:
+                result += f" -> {xf}"
+            q_str = str(query)
+            if q_str:
+                result += f" | {q_str}"
+
+        return result
 
     def is_live(self) -> bool:
         """True if this stream (or any ancestor in the chain) is in live mode."""
@@ -121,7 +146,7 @@ class Stream(Generic[T]):
     def near(self, pose: Any, radius: float) -> Stream[T]:
         return self._with_filter(NearFilter(pose, radius))
 
-    def filter_tags(self, **tags: Any) -> Stream[T]:
+    def tags(self, **tags: Any) -> Stream[T]:
         return self._with_filter(TagsFilter(tags))
 
     def order_by(self, field: str, desc: bool = False) -> Stream[T]:
@@ -217,10 +242,10 @@ class Stream(Generic[T]):
 
     def fetch(self) -> list[Observation[T]]:
         """Materialize all observations into a list."""
-        if self.is_live() and self._query.limit_val is None:
+        if self.is_live():
             raise TypeError(
-                ".fetch() on a live stream without .limit() would collect forever. "
-                "Use .limit(n).fetch(), .drain(), or .save(target) instead."
+                ".fetch() on a live stream would block forever. "
+                "Use .drain() or .save(target) instead."
             )
         return list(self)
 
@@ -248,6 +273,28 @@ class Stream(Generic[T]):
         """Check if any matching observation exists."""
         return next(iter(self.limit(1)), None) is not None
 
+    def get_time_range(self) -> tuple[float, float]:
+        """Return (min_ts, max_ts) for matching observations."""
+        first = self.first()
+        last = self.last()
+        return (first.ts, last.ts)
+
+    def summary(self) -> str:
+        """Return a short human-readable summary: count, time range, duration."""
+        from datetime import datetime, timezone
+
+        n = self.count()
+        if n == 0:
+            return f"{self}: empty"
+
+        (t0, t1) = self.get_time_range()
+
+        fmt = "%Y-%m-%d %H:%M:%S"
+        dt0 = datetime.fromtimestamp(t0, tz=timezone.utc).strftime(fmt)
+        dt1 = datetime.fromtimestamp(t1, tz=timezone.utc).strftime(fmt)
+        dur = t1 - t0
+        return f"{self}: {n} items, {dt0} — {dt1} ({dur:.1f}s)"
+
     def drain(self) -> int:
         """Consume all observations, discarding results. Returns count consumed.
 
@@ -258,6 +305,36 @@ class Stream(Generic[T]):
         for _ in self:
             n += 1
         return n
+
+    # ── Reactive ─────────────────────────────────────────────────────
+
+    def observable(self) -> reactivex.Observable[Observation[T]]:
+        """Convert this stream to an RxPY Observable.
+
+        Iteration is scheduled on the dimos thread pool so subscribe() never
+        blocks the calling thread.
+        """
+        import reactivex
+        import reactivex.operators as ops
+
+        from dimos.utils.threadpool import get_scheduler
+
+        return reactivex.from_iterable(self).pipe(
+            ops.subscribe_on(get_scheduler()),
+        )
+
+    def subscribe(
+        self,
+        on_next: Callable[[Observation[T]], None] | ObserverBase[Observation[T]] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+        on_completed: Callable[[], None] | None = None,
+    ) -> DisposableBase:
+        """Subscribe to this stream as an RxPY Observable."""
+        return self.observable().subscribe(  # type: ignore[call-overload]
+            on_next=on_next,
+            on_error=on_error,
+            on_completed=on_completed,
+        )
 
     # ── Write ───────────────────────────────────────────────────────
 
