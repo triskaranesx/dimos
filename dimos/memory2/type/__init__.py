@@ -13,9 +13,8 @@
 # limitations under the License.
 
 from dimos.memory2.type.backend import (
-    Backend,
-    BackendConfig,
     BlobStore,
+    Index,
     LiveChannel,
     VectorStore,
 )
@@ -41,12 +40,11 @@ __all__ = [
     "_UNLOADED",
     "AfterFilter",
     "AtFilter",
-    "Backend",
-    "BackendConfig",
     "BeforeFilter",
     "BlobStore",
     "EmbeddedObservation",
     "Filter",
+    "Index",
     "LiveChannel",
     "NearFilter",
     "Observation",

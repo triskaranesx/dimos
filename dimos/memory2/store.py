@@ -15,18 +15,13 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from dimos.core.resource import CompositeResource
 from dimos.memory2.codecs.base import Codec
 from dimos.memory2.stream import Stream
 from dimos.memory2.type.backend import BlobStore, LiveChannel, VectorStore
 from dimos.protocol.service.spec import BaseConfig, Configurable
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from dimos.memory2.type.backend import Backend
 
 T = TypeVar("T")
 
@@ -35,77 +30,25 @@ T = TypeVar("T")
 
 
 class StoreConfig(BaseConfig):
-    """Base config for Store. Subclasses extend with store-specific fields."""
+    """Store-level config. These are defaults inherited by all streams."""
 
-
-class SessionConfig(BaseConfig):
-    """Session-level defaults for stream capabilities.
-
-    These are inherited by all streams in the session unless overridden
-    per-stream in ``session.stream(..., **overrides)``.
-    """
-
-    live_channel: LiveChannel | None = None
+    live_channel: LiveChannel[Any] | None = None
     blob_store: BlobStore | None = None
     vector_store: VectorStore | None = None
     eager_blobs: bool = False
-    codec: Codec | str | None = None
+    codec: Codec[Any] | str | None = None
 
 
-# ── Stream namespace ──────────────────────────────────────────────
+# ── Store ─────────────────────────────────────────────────────────
 
 
-class StreamNamespace:
-    """Attribute-access proxy for session streams.
+class Store(Configurable[StoreConfig], CompositeResource):
+    """Top-level entry point — wraps a storage location (file, URL, etc.).
 
-    Usage::
-
-        session.streams.image_stream
-        session.streams["image_stream"]
-        list(session.streams)
-        len(session.streams)
+    Store directly manages streams. No Session layer.
     """
 
-    def __init__(self, session: Session) -> None:
-        self._session = session
-
-    def __getattr__(self, name: str) -> Stream[Any]:
-        if name.startswith("_"):
-            raise AttributeError(name)
-        if name not in self._session.list_streams():
-            available = ", ".join(self._session.list_streams()) or "(none)"
-            raise AttributeError(f"No stream named {name!r}. Available: {available}")
-        return self._session.stream(name)
-
-    def __getitem__(self, name: str) -> Stream[Any]:
-        if name not in self._session.list_streams():
-            raise KeyError(name)
-        return self._session.stream(name)
-
-    def __iter__(self) -> Iterator[Stream[Any]]:
-        for name in self._session.list_streams():
-            yield self._session.stream(name)
-
-    def __len__(self) -> int:
-        return len(self._session.list_streams())
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._session.list_streams()
-
-    def __repr__(self) -> str:
-        return f"StreamNamespace({self._session.list_streams()})"
-
-
-# ── Session & Store ───────────────────────────────────────────────
-
-
-class Session(Configurable[SessionConfig], CompositeResource):
-    """A session against a store. Manages named streams over a shared connection.
-
-    Subclasses implement ``_create_backend`` to provide storage-specific backends.
-    """
-
-    default_config: type[SessionConfig] = SessionConfig
+    default_config: type[StoreConfig] = StoreConfig
 
     def __init__(self, **kwargs: Any) -> None:
         Configurable.__init__(self, **kwargs)
@@ -115,15 +58,15 @@ class Session(Configurable[SessionConfig], CompositeResource):
     @abstractmethod
     def _create_backend(
         self, name: str, payload_type: type[Any] | None = None, **config: Any
-    ) -> Backend[Any]:
-        """Create a backend for the named stream. Called once per stream name."""
+    ) -> Any:
+        """Create a Backend for the named stream. Called once per stream name."""
         ...
 
     def stream(self, name: str, payload_type: type[T] | None = None, **overrides: Any) -> Stream[T]:
         """Get or create a named stream. Returns the same Stream on repeated calls.
 
-        Per-stream ``overrides`` (e.g. ``live_channel=``) are merged on top of
-        the session-level defaults from :class:`SessionConfig`.
+        Per-stream ``overrides`` (e.g. ``blob_store=``, ``codec=``) are merged
+        on top of the store-level defaults from :class:`StoreConfig`.
         """
         if name not in self._streams:
             resolved = {k: v for k, v in vars(self.config).items() if v is not None}
@@ -134,29 +77,10 @@ class Session(Configurable[SessionConfig], CompositeResource):
 
     @abstractmethod
     def list_streams(self) -> list[str]:
-        """Return names of all streams in this session."""
+        """Return names of all streams in this store."""
         ...
 
     @abstractmethod
     def delete_stream(self, name: str) -> None:
         """Delete a stream by name (from cache and underlying storage)."""
-        ...
-
-    @property
-    def streams(self) -> StreamNamespace:
-        return StreamNamespace(self)
-
-
-class Store(Configurable[StoreConfig], CompositeResource):
-    """Top-level entry point — wraps a storage location (file, URL, etc.)."""
-
-    default_config: type[StoreConfig] = StoreConfig
-
-    def __init__(self, **kwargs: Any) -> None:
-        Configurable.__init__(self, **kwargs)
-        CompositeResource.__init__(self)
-
-    @abstractmethod
-    def session(self, **kwargs: Any) -> Session:
-        """Create a session. kwargs are forwarded to SessionConfig."""
         ...

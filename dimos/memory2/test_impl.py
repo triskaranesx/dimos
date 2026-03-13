@@ -14,7 +14,7 @@
 
 """Grid tests for Store implementations.
 
-Runs the same test logic against every Store backend (MemoryStore, SqliteStore, …).
+Runs the same test logic against every Store backend (MemoryStore, SqliteStore, ...).
 The parametrized ``session`` fixture from conftest runs each test against both backends.
 """
 
@@ -27,7 +27,7 @@ import pytest
 from dimos.memory2.type.backend import BlobStore, VectorStore
 
 if TYPE_CHECKING:
-    from dimos.memory2.store import Session
+    from dimos.memory2.store import Store
 
 
 # ── Tests ─────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 class TestStoreBasic:
     """Core store operations that every backend must support."""
 
-    def test_create_stream_and_append(self, session: Session) -> None:
+    def test_create_stream_and_append(self, session: Store) -> None:
         s = session.stream("images", bytes)
         obs = s.append(b"frame1", tags={"camera": "front"})
 
@@ -44,7 +44,7 @@ class TestStoreBasic:
         assert obs.tags["camera"] == "front"
         assert obs.ts > 0
 
-    def test_append_multiple_and_fetch(self, session: Session) -> None:
+    def test_append_multiple_and_fetch(self, session: Store) -> None:
         s = session.stream("sensor", float)
         s.append(1.0, ts=100.0)
         s.append(2.0, ts=200.0)
@@ -54,7 +54,7 @@ class TestStoreBasic:
         assert len(results) == 3
         assert [o.data for o in results] == [1.0, 2.0, 3.0]
 
-    def test_iterate_stream(self, session: Session) -> None:
+    def test_iterate_stream(self, session: Store) -> None:
         s = session.stream("log", str)
         s.append("a", ts=1.0)
         s.append("b", ts=2.0)
@@ -62,14 +62,14 @@ class TestStoreBasic:
         collected = [obs.data for obs in s]
         assert collected == ["a", "b"]
 
-    def test_count(self, session: Session) -> None:
+    def test_count(self, session: Store) -> None:
         s = session.stream("events", str)
         assert s.count() == 0
         s.append("x")
         s.append("y")
         assert s.count() == 2
 
-    def test_first_and_last(self, session: Session) -> None:
+    def test_first_and_last(self, session: Store) -> None:
         s = session.stream("data", int)
         s.append(10, ts=1.0)
         s.append(20, ts=2.0)
@@ -78,18 +78,18 @@ class TestStoreBasic:
         assert s.first().data == 10
         assert s.last().data == 30
 
-    def test_first_empty_raises(self, session: Session) -> None:
+    def test_first_empty_raises(self, session: Store) -> None:
         s = session.stream("empty", int)
         with pytest.raises(LookupError):
             s.first()
 
-    def test_exists(self, session: Session) -> None:
+    def test_exists(self, session: Store) -> None:
         s = session.stream("check", str)
         assert not s.exists()
         s.append("hi")
         assert s.exists()
 
-    def test_filter_after(self, session: Session) -> None:
+    def test_filter_after(self, session: Store) -> None:
         s = session.stream("ts_data", int)
         s.append(1, ts=10.0)
         s.append(2, ts=20.0)
@@ -98,7 +98,7 @@ class TestStoreBasic:
         results = s.after(15.0).fetch()
         assert [o.data for o in results] == [2, 3]
 
-    def test_filter_before(self, session: Session) -> None:
+    def test_filter_before(self, session: Store) -> None:
         s = session.stream("ts_data", int)
         s.append(1, ts=10.0)
         s.append(2, ts=20.0)
@@ -107,7 +107,7 @@ class TestStoreBasic:
         results = s.before(25.0).fetch()
         assert [o.data for o in results] == [1, 2]
 
-    def test_filter_time_range(self, session: Session) -> None:
+    def test_filter_time_range(self, session: Store) -> None:
         s = session.stream("ts_data", int)
         s.append(1, ts=10.0)
         s.append(2, ts=20.0)
@@ -116,7 +116,7 @@ class TestStoreBasic:
         results = s.time_range(15.0, 25.0).fetch()
         assert [o.data for o in results] == [2]
 
-    def test_filter_tags(self, session: Session) -> None:
+    def test_filter_tags(self, session: Store) -> None:
         s = session.stream("tagged", str)
         s.append("a", tags={"kind": "info"})
         s.append("b", tags={"kind": "error"})
@@ -125,7 +125,7 @@ class TestStoreBasic:
         results = s.tags(kind="info").fetch()
         assert [o.data for o in results] == ["a", "c"]
 
-    def test_limit_and_offset(self, session: Session) -> None:
+    def test_limit_and_offset(self, session: Store) -> None:
         s = session.stream("paged", int)
         for i in range(5):
             s.append(i, ts=float(i))
@@ -133,7 +133,7 @@ class TestStoreBasic:
         page = s.offset(1).limit(2).fetch()
         assert [o.data for o in page] == [1, 2]
 
-    def test_order_by_desc(self, session: Session) -> None:
+    def test_order_by_desc(self, session: Store) -> None:
         s = session.stream("ordered", int)
         s.append(1, ts=10.0)
         s.append(2, ts=20.0)
@@ -142,7 +142,7 @@ class TestStoreBasic:
         results = s.order_by("ts", desc=True).fetch()
         assert [o.data for o in results] == [3, 2, 1]
 
-    def test_separate_streams_isolated(self, session: Session) -> None:
+    def test_separate_streams_isolated(self, session: Store) -> None:
         a = session.stream("stream_a", str)
         b = session.stream("stream_b", str)
 
@@ -152,12 +152,12 @@ class TestStoreBasic:
         assert [o.data for o in a] == ["in_a"]
         assert [o.data for o in b] == ["in_b"]
 
-    def test_same_stream_on_repeated_calls(self, session: Session) -> None:
+    def test_same_stream_on_repeated_calls(self, session: Store) -> None:
         s1 = session.stream("reuse", str)
         s2 = session.stream("reuse", str)
         assert s1 is s2
 
-    def test_append_with_embedding(self, session: Session) -> None:
+    def test_append_with_embedding(self, session: Store) -> None:
         import numpy as np
 
         from dimos.memory2.type.observation import EmbeddedObservation
@@ -169,7 +169,7 @@ class TestStoreBasic:
         assert isinstance(obs, EmbeddedObservation)
         assert obs.embedding is emb
 
-    def test_search_top_k(self, session: Session) -> None:
+    def test_search_top_k(self, session: Store) -> None:
         import numpy as np
 
         from dimos.models.embedding.base import Embedding
@@ -188,12 +188,12 @@ class TestStoreBasic:
         assert results[0].data == "north"
         assert results[0].similarity > 0.99
 
-    def test_search_text(self, session: Session) -> None:
+    def test_search_text(self, session: Store) -> None:
         s = session.stream("logs", str)
         s.append("motor fault")
         s.append("temperature ok")
 
-        # SqliteBackend blocks search_text to prevent full table scans
+        # SqliteIndex blocks search_text to prevent full table scans
         try:
             results = s.search_text("motor").fetch()
         except NotImplementedError:
@@ -208,11 +208,11 @@ class TestStoreBasic:
 class TestBlobLoading:
     """Verify lazy and eager blob loading paths."""
 
-    def test_sqlite_lazy_by_default(self, sqlite_session: Session) -> None:
+    def test_sqlite_lazy_by_default(self, sqlite_store: Store) -> None:
         """Default sqlite iteration uses lazy loaders — data is _UNLOADED until accessed."""
         from dimos.memory2.type.observation import _Unloaded
 
-        s = sqlite_session.stream("lazy_test", str)
+        s = sqlite_store.stream("lazy_test", str)
         s.append("hello", ts=1.0)
         s.append("world", ts=2.0)
 
@@ -226,11 +226,11 @@ class TestBlobLoading:
             # After loading, _loader is cleared
             assert obs._loader is None
 
-    def test_sqlite_eager_loads_inline(self, sqlite_session: Session) -> None:
+    def test_sqlite_eager_loads_inline(self, sqlite_store: Store) -> None:
         """With eager_blobs=True, data is loaded via JOIN — no lazy loader."""
         from dimos.memory2.type.observation import _Unloaded
 
-        s = sqlite_session.stream("eager_test", str, eager_blobs=True)
+        s = sqlite_store.stream("eager_test", str, eager_blobs=True)
         s.append("hello", ts=1.0)
         s.append("world", ts=2.0)
 
@@ -240,9 +240,9 @@ class TestBlobLoading:
             assert obs._loader is None
             assert isinstance(obs.data, str)
 
-    def test_sqlite_lazy_and_eager_same_values(self, sqlite_session: Session) -> None:
+    def test_sqlite_lazy_and_eager_same_values(self, sqlite_store: Store) -> None:
         """Both paths must return identical data."""
-        lazy_s = sqlite_session.stream("vals", str)
+        lazy_s = sqlite_store.stream("vals", str)
         lazy_s.append("alpha", ts=1.0, tags={"k": "v"})
         lazy_s.append("beta", ts=2.0, tags={"k": "w"})
 
@@ -250,26 +250,27 @@ class TestBlobLoading:
         lazy_results = lazy_s.fetch()
 
         # Eager read — new stream handle with eager_blobs on same backend
-        eager_s = sqlite_session.stream("vals", str, eager_blobs=True)
+        eager_s = sqlite_store.stream("vals", str, eager_blobs=True)
         eager_results = eager_s.fetch()
 
         assert [o.data for o in lazy_results] == [o.data for o in eager_results]
         assert [o.tags for o in lazy_results] == [o.tags for o in eager_results]
         assert [o.ts for o in lazy_results] == [o.ts for o in eager_results]
 
-    def test_memory_lazy_with_blobstore(self, memory_store, tmp_path) -> None:
+    def test_memory_lazy_with_blobstore(self, tmp_path) -> None:
         """MemoryStore with a BlobStore uses lazy loaders."""
         from dimos.memory2.blobstore.file import FileBlobStore
+        from dimos.memory2.impl.memory import MemoryStore
         from dimos.memory2.type.observation import _Unloaded
 
         bs = FileBlobStore(root=tmp_path / "blobs")
         bs.start()
-        with memory_store.session(blob_store=bs) as session:
-            s = session.stream("mem_lazy", str)
+        with MemoryStore(blob_store=bs) as store:
+            s = store.stream("mem_lazy", str)
             s.append("data1", ts=1.0)
 
             obs = s.first()
-            # ListBackend replaces _data with _UNLOADED when blob_store is set
+            # Backend replaces _data with _UNLOADED when blob_store is set
             assert isinstance(obs._data, _Unloaded)
             assert obs.data == "data1"
         bs.stop()
@@ -344,10 +345,8 @@ def memory_spy_session():
 
     blob_spy = SpyBlobStore()
     vec_spy = SpyVectorStore()
-    store = MemoryStore()
-    with store.session(blob_store=blob_spy, vector_store=vec_spy) as session:
-        yield session, blob_spy, vec_spy
-    store.stop()
+    with MemoryStore(blob_store=blob_spy, vector_store=vec_spy) as store:
+        yield store, blob_spy, vec_spy
 
 
 @pytest.fixture
@@ -356,10 +355,10 @@ def sqlite_spy_session(tmp_path):
 
     blob_spy = SpyBlobStore()
     vec_spy = SpyVectorStore()
-    store = SqliteStore(path=str(tmp_path / "spy.db"))
-    with store.session(blob_store=blob_spy, vector_store=vec_spy) as session:
-        yield session, blob_spy, vec_spy
-    store.stop()
+    with SqliteStore(
+        path=str(tmp_path / "spy.db"), blob_store=blob_spy, vector_store=vec_spy
+    ) as store:
+        yield store, blob_spy, vec_spy
 
 
 @pytest.fixture(params=["memory_spy_session", "sqlite_spy_session"])
@@ -371,8 +370,8 @@ class TestStoreDelegation:
     """Verify all backends delegate to pluggable BlobStore and VectorStore."""
 
     def test_append_calls_blob_put(self, spy_session) -> None:
-        session, blob_spy, _vec_spy = spy_session
-        s = session.stream("blobs", str)
+        store, blob_spy, _vec_spy = spy_session
+        s = store.stream("blobs", str)
         s.append("first", ts=1.0)
         s.append("second", ts=2.0)
 
@@ -380,8 +379,8 @@ class TestStoreDelegation:
         assert all(stream == "blobs" for stream, _k, _d in blob_spy.puts)
 
     def test_iterate_calls_blob_get(self, spy_session) -> None:
-        session, blob_spy, _vec_spy = spy_session
-        s = session.stream("blobs", str)
+        store, blob_spy, _vec_spy = spy_session
+        s = store.stream("blobs", str)
         s.append("a", ts=1.0)
         s.append("b", ts=2.0)
 
@@ -399,8 +398,8 @@ class TestStoreDelegation:
             a = np.array(v, dtype=np.float32)
             return Embedding(vector=a / (np.linalg.norm(a) + 1e-10))
 
-        session, _blob_spy, vec_spy = spy_session
-        s = session.stream("vecs", str)
+        store, _blob_spy, vec_spy = spy_session
+        s = store.stream("vecs", str)
         s.append("a", ts=1.0, embedding=_emb([1, 0, 0]))
         s.append("b", ts=2.0, embedding=_emb([0, 1, 0]))
         s.append("c", ts=3.0)  # no embedding
@@ -416,8 +415,8 @@ class TestStoreDelegation:
             a = np.array(v, dtype=np.float32)
             return Embedding(vector=a / (np.linalg.norm(a) + 1e-10))
 
-        session, _blob_spy, vec_spy = spy_session
-        s = session.stream("vecs", str)
+        store, _blob_spy, vec_spy = spy_session
+        s = store.stream("vecs", str)
         s.append("north", ts=1.0, embedding=_emb([0, 1, 0]))
         s.append("east", ts=2.0, embedding=_emb([1, 0, 0]))
 

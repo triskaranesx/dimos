@@ -18,8 +18,6 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, runtime_checkable
 
 from dimos.core.resource import Resource
-from dimos.memory2.codecs.base import Codec
-from dimos.protocol.service.spec import BaseConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -34,51 +32,30 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-# ── Backend configuration ───────────────────────────────────────
-
-
-class BackendConfig(BaseConfig):
-    """Configuration for backend capabilities.
-
-    Session-level defaults are merged with per-stream overrides and
-    forwarded here by ``Session.stream()``.
-    """
-
-    live_channel: LiveChannel | None = None
-    blob_store: BlobStore | None = None
-    vector_store: VectorStore | None = None
-    eager_blobs: bool = False
-    codec: Codec | None = None
-    page_size: int = 256
-
-
 @runtime_checkable
-class Backend(Protocol[T]):
-    """Data source protocol for stored observations.
+class Index(Protocol[T]):
+    """Core metadata storage and query engine for observations.
 
-    The backend is fully responsible for applying query filters.
-    How it does so (SQL, R-tree, Python predicates) is its business.
-
-    Every backend supports live mode via a built-in ``LiveChannel``.
+    Handles only observation metadata storage, query pushdown, and count.
+    Blob/vector/live orchestration is handled by the concrete Backend class.
     """
 
     @property
     def name(self) -> str: ...
 
-    @property
-    def live_channel(self) -> LiveChannel[T]: ...
-
-    def iterate(self, query: StreamQuery) -> Iterator[Observation[T]]: ...
-
-    def append(self, obs: Observation[T]) -> Observation[T]:
-        """Store an observation, assigning it a backend-managed id.
-
-        The caller builds the Observation (or EmbeddedObservation);
-        the backend assigns the canonical ``id`` and persists it.
-        """
+    def insert(self, obs: Observation[T]) -> int:
+        """Insert observation metadata, return assigned id."""
         ...
 
-    def count(self, query: StreamQuery) -> int: ...
+    def query(self, q: StreamQuery) -> Iterator[Observation[T]]:
+        """Execute query against metadata. Blobs are NOT loaded here."""
+        ...
+
+    def count(self, q: StreamQuery) -> int: ...
+
+    def fetch_by_ids(self, ids: list[int]) -> list[Observation[T]]:
+        """Batch fetch by id (for vector search results)."""
+        ...
 
 
 # ── Live notification channel ────────────────────────────────────

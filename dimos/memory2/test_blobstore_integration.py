@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for BlobStore integration with ListBackend."""
+"""Tests for BlobStore integration with MemoryStore/Backend."""
 
 from __future__ import annotations
 
@@ -29,8 +29,6 @@ from dimos.models.embedding.base import Embedding
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
-
-    from dimos.memory2.impl.memory import MemorySession
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -53,48 +51,41 @@ def bs(tmp_path: Path) -> Generator[FileBlobStore, None, None]:
 
 
 @pytest.fixture
-def store() -> Generator[MemoryStore, None, None]:
-    s = MemoryStore()
-    yield s
-    s.stop()
-
-
-@pytest.fixture
-def session(store: MemoryStore, bs: FileBlobStore) -> Generator[MemorySession, None, None]:
-    with store.session(blob_store=bs) as sess:
-        yield sess
+def store(bs: FileBlobStore) -> Generator[MemoryStore, None, None]:
+    with MemoryStore(blob_store=bs) as s:
+        yield s
 
 
 # ── Tests ─────────────────────────────────────────────────────────
 
 
 class TestBlobStoreIntegration:
-    def test_append_stores_in_blobstore(self, bs: FileBlobStore, session: MemorySession) -> None:
-        s = session.stream("data", bytes)
+    def test_append_stores_in_blobstore(self, bs: FileBlobStore, store: MemoryStore) -> None:
+        s = store.stream("data", bytes)
         s.append(b"hello", ts=1.0)
 
         # Blob was written to the file store
         raw = bs.get("data", 0)
         assert len(raw) > 0
 
-    def test_lazy_data_not_loaded_until_access(self, session: MemorySession) -> None:
-        s = session.stream("data", str)
+    def test_lazy_data_not_loaded_until_access(self, store: MemoryStore) -> None:
+        s = store.stream("data", str)
         obs = s.append("payload", ts=1.0)
 
         # Data replaced with sentinel after append
         assert isinstance(obs._data, type(_UNLOADED))
         assert obs._loader is not None
 
-    def test_lazy_data_loads_correctly(self, session: MemorySession) -> None:
-        s = session.stream("data", str)
+    def test_lazy_data_loads_correctly(self, store: MemoryStore) -> None:
+        s = store.stream("data", str)
         s.append("payload", ts=1.0)
 
         result = s.first()
         assert result.data == "payload"
 
-    def test_eager_preloads_data(self, store: MemoryStore, bs: FileBlobStore) -> None:
-        with store.session(blob_store=bs, eager_blobs=True) as session:
-            s = session.stream("data", str)
+    def test_eager_preloads_data(self, bs: FileBlobStore) -> None:
+        with MemoryStore(blob_store=bs, eager_blobs=True) as store:
+            s = store.stream("data", str)
             s.append("payload", ts=1.0)
 
             # Iterating with eager_blobs triggers load
@@ -104,13 +95,13 @@ class TestBlobStoreIntegration:
             assert not isinstance(results[0]._data, type(_UNLOADED))
             assert results[0].data == "payload"
 
-    def test_per_stream_eager_override(self, session: MemorySession) -> None:
+    def test_per_stream_eager_override(self, store: MemoryStore) -> None:
         # Default: lazy
-        lazy_stream = session.stream("lazy", str)
+        lazy_stream = store.stream("lazy", str)
         lazy_stream.append("lazy-val", ts=1.0)
 
         # Override: eager
-        eager_stream = session.stream("eager", str, eager_blobs=True)
+        eager_stream = store.stream("eager", str, eager_blobs=True)
         eager_stream.append("eager-val", ts=1.0)
 
         lazy_results = lazy_stream.fetch()
@@ -123,9 +114,9 @@ class TestBlobStoreIntegration:
         assert not isinstance(eager_results[0]._data, type(_UNLOADED))
         assert eager_results[0].data == "eager-val"
 
-    def test_no_blobstore_unchanged(self, store: MemoryStore) -> None:
-        with store.session() as session:
-            s = session.stream("data", str)
+    def test_no_blobstore_unchanged(self) -> None:
+        with MemoryStore() as store:
+            s = store.stream("data", str)
             obs = s.append("inline", ts=1.0)
 
             # Without blob store, data stays inline
@@ -133,12 +124,12 @@ class TestBlobStoreIntegration:
             assert obs._loader is None
             assert obs.data == "inline"
 
-    def test_blobstore_with_vector_search(self, store: MemoryStore, bs: FileBlobStore) -> None:
+    def test_blobstore_with_vector_search(self, bs: FileBlobStore) -> None:
         from dimos.memory2.vectorstore import MemoryVectorStore
 
         vs = MemoryVectorStore()
-        with store.session(blob_store=bs, vector_store=vs) as session:
-            s = session.stream("vecs", str)
+        with MemoryStore(blob_store=bs, vector_store=vs) as store:
+            s = store.stream("vecs", str)
             s.append("north", ts=1.0, embedding=_emb([0, 1, 0]))
             s.append("east", ts=2.0, embedding=_emb([1, 0, 0]))
             s.append("south", ts=3.0, embedding=_emb([0, -1, 0]))
@@ -149,8 +140,8 @@ class TestBlobStoreIntegration:
             assert results[0].data == "north"
             assert results[0].similarity > 0.99
 
-    def test_blobstore_with_text_search(self, session: MemorySession) -> None:
-        s = session.stream("logs", str)
+    def test_blobstore_with_text_search(self, store: MemoryStore) -> None:
+        s = store.stream("logs", str)
         s.append("motor fault", ts=1.0)
         s.append("temperature ok", ts=2.0)
 
@@ -159,8 +150,8 @@ class TestBlobStoreIntegration:
         assert len(results) == 1
         assert results[0].data == "motor fault"
 
-    def test_multiple_appends_get_unique_blobs(self, session: MemorySession) -> None:
-        s = session.stream("multi", str)
+    def test_multiple_appends_get_unique_blobs(self, store: MemoryStore) -> None:
+        s = store.stream("multi", str)
         s.append("first", ts=1.0)
         s.append("second", ts=2.0)
         s.append("third", ts=3.0)
@@ -168,8 +159,8 @@ class TestBlobStoreIntegration:
         results = s.fetch()
         assert [r.data for r in results] == ["first", "second", "third"]
 
-    def test_fetch_preserves_metadata(self, session: MemorySession) -> None:
-        s = session.stream("meta", str)
+    def test_fetch_preserves_metadata(self, store: MemoryStore) -> None:
+        s = store.stream("meta", str)
         s.append("val", ts=42.0, tags={"kind": "info"})
 
         result = s.first()

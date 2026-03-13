@@ -31,8 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
 
-    from dimos.memory2.impl.memory import MemorySession
-    from dimos.memory2.store import Session
+    from dimos.memory2.store import Store
     from dimos.memory2.type.backend import BlobStore
 
 
@@ -46,9 +45,9 @@ def memory_store() -> Generator[MemoryStore, None, None]:
 
 
 @pytest.fixture
-def memory_session(memory_store: MemoryStore) -> Generator[MemorySession, None, None]:
-    with memory_store.session() as session:
-        yield session
+def memory_session(memory_store: MemoryStore) -> Generator[MemoryStore, None, None]:
+    """Alias: in the new architecture, the store IS the session."""
+    yield memory_store
 
 
 @pytest.fixture
@@ -60,13 +59,18 @@ def sqlite_store() -> Generator[SqliteStore, None, None]:
 
 
 @pytest.fixture
-def sqlite_session(sqlite_store: SqliteStore) -> Generator[Session, None, None]:
-    with sqlite_store.session() as session:
-        yield session
+def sqlite_session(sqlite_store: SqliteStore) -> Generator[SqliteStore, None, None]:
+    """Alias: in the new architecture, the store IS the session."""
+    yield sqlite_store
 
 
-@pytest.fixture(params=["memory_session", "sqlite_session"])
-def session(request: pytest.FixtureRequest) -> Session:
+@pytest.fixture(params=["memory_store", "sqlite_store"])
+def session(request: pytest.FixtureRequest) -> Store:
+    """Parametrized fixture that runs tests against both backends.
+
+    Named 'session' to minimize test changes — tests use session.stream() which
+    now goes directly to Store.stream().
+    """
     return request.getfixturevalue(request.param)
 
 

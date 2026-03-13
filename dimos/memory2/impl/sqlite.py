@@ -14,20 +14,16 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from itertools import islice
 import json
 import re
 import sqlite3
 import threading
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from dimos.core.resource import CompositeResource
+from dimos.memory2.backend import Backend
 from dimos.memory2.blobstore.sqlite import SqliteBlobStore
 from dimos.memory2.codecs.base import Codec, codec_for, codec_from_id, codec_id
-from dimos.memory2.livechannel.subject import SubjectChannel
-from dimos.memory2.store import Session, Store, StoreConfig
-from dimos.memory2.type.backend import BackendConfig
+from dimos.memory2.store import Store, StoreConfig
 from dimos.memory2.type.filter import (
     AfterFilter,
     AtFilter,
@@ -39,15 +35,10 @@ from dimos.memory2.type.filter import (
 )
 from dimos.memory2.type.observation import _UNLOADED, Observation
 from dimos.memory2.utils import validate_identifier
-from dimos.protocol.service.spec import Configurable
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from reactivex.abc import DisposableBase
-
-    from dimos.memory2.buffer import BackpressureBuffer
-    from dimos.memory2.type.backend import Backend, LiveChannel
     from dimos.memory2.type.filter import Filter, StreamQuery
 
 T = TypeVar("T")
@@ -236,51 +227,47 @@ def _compile_count(
     return (sql, params, python_filters)
 
 
-# ── SqliteBackend ────────────────────────────────────────────────
+# ── SqliteIndex ────────────────────────────────────────────────
 
 
-class SqliteBackend(Configurable[BackendConfig], CompositeResource, Generic[T]):
-    """SQLite-backed observation storage for a single stream (table).
+class SqliteIndex(Generic[T]):
+    """SQLite-backed metadata index for a single stream (table).
 
-    Owns its ``sqlite3.Connection``.  When disposed (via
-    ``CompositeResource.stop()``), the connection is closed.
+    Handles only metadata storage and query pushdown.
+    Blob/vector/live orchestration is handled by Backend.
     """
 
-    default_config: type[BackendConfig] = BackendConfig
-
-    def __init__(self, conn: sqlite3.Connection, name: str, **kwargs: Any) -> None:
-        Configurable.__init__(self, **kwargs)
-        CompositeResource.__init__(self)
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        name: str,
+        codec: Codec[Any],
+        blob_store_conn_match: bool = False,
+        page_size: int = 256,
+    ) -> None:
         self._conn = conn
         self._name = name
-        self._codec: Codec[Any] = self.config.codec  # type: ignore[assignment]
-        self._channel: LiveChannel[T] = self.config.live_channel or SubjectChannel()
+        self._codec = codec
+        self._blob_store_conn_match = blob_store_conn_match
+        self._page_size = page_size
         self._lock = threading.Lock()
         self._tag_indexes: set[str] = set()
+        self._pending_python_filters: list[Any] = []
+        self._pending_query: StreamQuery | None = None
 
     @property
     def name(self) -> str:
         return self._name
 
     @property
-    def live_channel(self) -> LiveChannel[T]:
-        return self._channel
-
-    @property
     def _join_blobs(self) -> bool:
-        if not self.config.eager_blobs:
-            return False
-        bs = self.config.blob_store
-        return isinstance(bs, SqliteBlobStore) and bs._conn is self._conn
+        return self._blob_store_conn_match
 
-    def _make_loader(self, row_id: int) -> Any:
-        bs = self.config.blob_store
-        if bs is None:
-            raise RuntimeError("BlobStore required but not configured")
+    def _make_loader(self, row_id: int, blob_store: Any) -> Any:
         name, codec = self._name, self._codec
 
         def loader() -> Any:
-            raw = bs.get(name, row_id)
+            raw = blob_store.get(name, row_id)
             return codec.decode(raw)
 
         return loader
@@ -305,13 +292,11 @@ class SqliteBackend(Configurable[BackendConfig], CompositeResource, Generic[T]):
             pose=pose,
             tags=tags,
             _data=_UNLOADED,
-            _loader=self._make_loader(row_id),  # type: ignore[arg-type]
         )
 
     # ── Write ────────────────────────────────────────────────────
 
     def _ensure_tag_indexes(self, tags: dict[str, Any]) -> None:
-        """Auto-create expression indexes for any new tag keys."""
         for key in tags:
             if key not in self._tag_indexes and _IDENT_RE.match(key):
                 self._conn.execute(
@@ -320,8 +305,7 @@ class SqliteBackend(Configurable[BackendConfig], CompositeResource, Generic[T]):
                 )
                 self._tag_indexes.add(key)
 
-    def append(self, obs: Observation[T]) -> Observation[T]:
-        encoded = self._codec.encode(obs._data)
+    def insert(self, obs: Observation[T]) -> int:
         pose = _decompose_pose(obs.pose)
         tags_json = json.dumps(obs.tags) if obs.tags else "{}"
 
@@ -333,92 +317,68 @@ class SqliteBackend(Configurable[BackendConfig], CompositeResource, Generic[T]):
             else:
                 px = py = pz = qx = qy = qz = qw = None  # type: ignore[assignment]
 
-            try:
-                cur = self._conn.execute(
-                    f'INSERT INTO "{self._name}" (ts, pose_x, pose_y, pose_z, pose_qx, pose_qy, pose_qz, pose_qw, tags) '
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))",
-                    (obs.ts, px, py, pz, qx, qy, qz, qw, tags_json),
+            cur = self._conn.execute(
+                f'INSERT INTO "{self._name}" (ts, pose_x, pose_y, pose_z, pose_qx, pose_qy, pose_qz, pose_qw, tags) '
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))",
+                (obs.ts, px, py, pz, qx, qy, qz, qw, tags_json),
+            )
+            row_id = cur.lastrowid
+            assert row_id is not None
+
+            # R*Tree spatial index
+            if pose:
+                self._conn.execute(
+                    f'INSERT INTO "{self._name}_rtree" (id, x_min, x_max, y_min, y_max, z_min, z_max) '
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (row_id, px, px, py, py, pz, pz),
                 )
-                row_id = cur.lastrowid
-                assert row_id is not None
 
-                bs = self.config.blob_store
-                if bs is None:
-                    raise RuntimeError("BlobStore required but not configured")
-                bs.put(self._name, row_id, encoded)
+            # Do NOT commit here — Backend calls commit() after blob/vector writes
 
-                # R*Tree spatial index
-                if pose:
-                    self._conn.execute(
-                        f'INSERT INTO "{self._name}_rtree" (id, x_min, x_max, y_min, y_max, z_min, z_max) '
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (row_id, px, px, py, py, pz, pz),
-                    )
+        return row_id
 
-                vs = self.config.vector_store
-                if vs is not None:
-                    emb = getattr(obs, "embedding", None)
-                    if emb is not None:
-                        vs.put(self._name, row_id, emb)
+    def commit(self) -> None:
+        self._conn.commit()
 
-                self._conn.commit()
-            except BaseException:
-                self._conn.rollback()
-                raise
-
-        obs.id = row_id
-        self._channel.notify(obs)
-        return obs
+    def rollback(self) -> None:
+        self._conn.rollback()
 
     # ── Read ─────────────────────────────────────────────────────
 
-    def iterate(self, query: StreamQuery) -> Iterator[Observation[T]]:
-        if query.search_vec is not None and query.live_buffer is not None:
-            raise TypeError("Cannot combine .search() with .live() — search is a batch operation.")
-        buf = query.live_buffer
-        if buf is not None:
-            sub = self._channel.subscribe(buf)
-            return self._iterate_live(query, buf, sub)
-        return self._iterate_snapshot(query)
-
-    def _iterate_snapshot(self, query: StreamQuery) -> Iterator[Observation[T]]:
-        if query.search_text is not None:
-            raise NotImplementedError("search_text is not supported by SqliteBackend")
-
-        if query.search_vec is not None and self.config.vector_store is not None:
-            yield from self._vector_search(query)
-            return
+    def query(self, q: StreamQuery) -> Iterator[Observation[T]]:
+        if q.search_text is not None:
+            raise NotImplementedError("search_text is not supported by SqliteIndex")
 
         join = self._join_blobs
-        sql, params, python_filters = _compile_query(query, self._name, join_blob=join)
+        sql, params, python_filters = _compile_query(q, self._name, join_blob=join)
 
         cur = self._conn.execute(sql, params)
-        cur.arraysize = self.config.page_size
+        cur.arraysize = self._page_size
         it: Iterator[Observation[T]] = (self._row_to_obs(r, has_blob=join) for r in cur)
 
-        # Apply Python post-filters
+        # Don't apply python post-filters here — Backend._attach_loaders must
+        # run first so that obs.data works for PredicateFilter etc.
+        # Store them so Backend can retrieve and apply after attaching loaders.
+        self._pending_python_filters = python_filters
+        self._pending_query = q
+
+        return it
+
+    def count(self, q: StreamQuery) -> int:
+        if q.search_vec:
+            # Delegate to Backend for vector-aware counting
+            raise NotImplementedError("count with search_vec must go through Backend")
+
+        sql, params, python_filters = _compile_count(q, self._name)
         if python_filters:
-            it = (obs for obs in it if all(f.matches(obs) for f in python_filters))
+            return sum(1 for _ in self.query(q))
 
-            # Apply LIMIT/OFFSET in Python when we couldn't push to SQL
-            if query.offset_val:
-                it = islice(it, query.offset_val, None)
-            if query.limit_val is not None:
-                it = islice(it, query.limit_val)
+        row = self._conn.execute(sql, params).fetchone()
+        return int(row[0]) if row else 0
 
-        yield from it
-
-    def _vector_search(self, query: StreamQuery) -> Iterator[Observation[T]]:
-        vs = self.config.vector_store
-        assert vs is not None and query.search_vec is not None
-
-        hits = vs.search(self._name, query.search_vec, query.search_k or 10)
-        if not hits:
-            return
-
-        ids = [h[0] for h in hits]
-
-        # Batch-fetch metadata
+    def fetch_by_ids(self, ids: list[int]) -> list[Observation[T]]:
+        if not ids:
+            return []
         join = self._join_blobs
         placeholders = ",".join("?" * len(ids))
         if join:
@@ -437,85 +397,30 @@ class SqliteBackend(Configurable[BackendConfig], CompositeResource, Generic[T]):
             )
 
         rows = self._conn.execute(sql, ids).fetchall()
-        obs_by_id: dict[int, Observation[T]] = {}
-        for r in rows:
-            obs = self._row_to_obs(r, has_blob=join)
-            obs_by_id[obs.id] = obs
-
-        # Preserve VectorStore ranking order, promoting to EmbeddedObservation
-        ranked: list[Observation[T]] = []
-        for obs_id, sim in hits:
-            match = obs_by_id.get(obs_id)
-            if match is not None:
-                ranked.append(
-                    match.derive(data=match.data, embedding=query.search_vec, similarity=sim)
-                )
-
-        # Apply remaining query ops (skip vector search)
-        rest = replace(query, search_vec=None, search_k=None)
-        yield from rest.apply(iter(ranked))
-
-    def _iterate_live(
-        self,
-        query: StreamQuery,
-        buf: BackpressureBuffer[Observation[T]],
-        sub: DisposableBase,
-    ) -> Iterator[Observation[T]]:
-        from dimos.memory2.buffer import ClosedError
-
-        try:
-            # Backfill phase
-            last_id = -1
-            for obs in self._iterate_snapshot(query):
-                last_id = max(last_id, obs.id)
-                yield obs
-
-            # Live tail
-            filters = query.filters
-            while True:
-                obs = buf.take()
-                if obs.id <= last_id:
-                    continue
-                last_id = obs.id
-                if filters and not all(f.matches(obs) for f in filters):
-                    continue
-                yield obs
-        except (ClosedError, StopIteration):
-            pass
-        finally:
-            sub.dispose()
-
-    def count(self, query: StreamQuery) -> int:
-        if query.search_vec:
-            return sum(1 for _ in self.iterate(query))
-
-        sql, params, python_filters = _compile_count(query, self._name)
-        if python_filters:
-            return sum(1 for _ in self.iterate(query))
-
-        row = self._conn.execute(sql, params).fetchone()
-        return int(row[0]) if row else 0
+        return [self._row_to_obs(r, has_blob=join) for r in rows]
 
     def stop(self) -> None:
-        super().stop()
         self._conn.close()
 
 
-# ── SqliteSession ────────────────────────────────────────────────
+# ── SqliteStore ──────────────────────────────────────────────────
 
 
-class SqliteSession(Session):
-    """Session owning a SQLite database.
+class SqliteStoreConfig(StoreConfig):
+    """Config for SQLite-backed store."""
 
-    Each backend gets its own ``sqlite3.Connection`` so SQLite WAL mode
-    handles cross-stream concurrency natively.  A separate
-    ``_registry_conn`` is used only for the ``_streams`` registry table.
-    """
+    path: str = "memory.db"
+    page_size: int = 256
 
-    def __init__(self, db_path: str, **kwargs: Any) -> None:
+
+class SqliteStore(Store):
+    """Store backed by a SQLite database file."""
+
+    default_config: type[SqliteStoreConfig] = SqliteStoreConfig
+    config: SqliteStoreConfig
+
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._db_path = db_path
-
         # Dedicated connection for the stream registry table
         self._registry_conn = self._open_connection()
         self._registry_conn.execute(
@@ -531,21 +436,13 @@ class SqliteSession(Session):
         """Open a new WAL-mode connection with sqlite-vec loaded."""
         import sqlite_vec
 
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn = sqlite3.connect(self.config.path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
         return conn
-
-    @staticmethod
-    def _codec_id(c: Codec[Any]) -> str:
-        return codec_id(c)
-
-    @staticmethod
-    def _codec_from_id(codec_id_str: str, payload_module: str) -> Codec[Any]:
-        return codec_from_id(codec_id_str, payload_module)
 
     def _create_backend(
         self, name: str, payload_type: type[Any] | None = None, **config: Any
@@ -569,10 +466,12 @@ class SqliteSession(Session):
             raw_codec = config.get("codec")
             if isinstance(raw_codec, str):
                 codec = codec_from_id(raw_codec, stored_module)
+            elif isinstance(raw_codec, Codec):
+                codec = raw_codec
             elif raw_codec is not None:
                 codec = raw_codec
             else:
-                codec = self._codec_from_id(stored_codec_id, stored_module)
+                codec = codec_from_id(stored_codec_id, stored_module)
         else:
             if payload_type is None:
                 raise TypeError(f"Stream {name!r} does not exist yet — payload_type is required")
@@ -580,13 +479,15 @@ class SqliteSession(Session):
             raw_codec = config.get("codec")
             if isinstance(raw_codec, str):
                 codec = codec_from_id(raw_codec, payload_module)
+            elif isinstance(raw_codec, Codec):
+                codec = raw_codec
             elif raw_codec is not None:
                 codec = raw_codec
             else:
                 codec = codec_for(payload_type)
             self._registry_conn.execute(
                 "INSERT INTO _streams (name, payload_module, codec_id) VALUES (?, ?, ?)",
-                (name, payload_module, self._codec_id(codec)),
+                (name, payload_module, codec_id(codec)),
             )
             self._registry_conn.commit()
 
@@ -615,16 +516,37 @@ class SqliteSession(Session):
         backend_conn.commit()
 
         # Create per-backend stores wrapping the backend's own connection
-        if "blob_store" not in config or config["blob_store"] is None:
-            config["blob_store"] = SqliteBlobStore(backend_conn)
-        if "vector_store" not in config or config["vector_store"] is None:
+        bs = config.get("blob_store")
+        if bs is None:
+            bs = SqliteBlobStore(backend_conn)
+        vs = config.get("vector_store")
+        if vs is None:
             from dimos.memory2.vectorstore.sqlite import SqliteVectorStore
 
-            config["vector_store"] = SqliteVectorStore(backend_conn)
-        config["codec"] = codec
+            vs = SqliteVectorStore(backend_conn)
 
-        backend: SqliteBackend[Any] = SqliteBackend(backend_conn, name, **config)
-        self.register_disposables(backend)
+        # Detect if blob_store shares the same SQLite connection (for eager JOIN)
+        blob_store_conn_match = isinstance(bs, SqliteBlobStore) and bs._conn is backend_conn
+
+        index: SqliteIndex[Any] = SqliteIndex(
+            backend_conn,
+            name,
+            codec,
+            blob_store_conn_match=blob_store_conn_match and config.get("eager_blobs", False),
+            page_size=self.config.page_size,
+        )
+
+        backend: Backend[Any] = Backend(
+            index=index,
+            codec=codec,
+            blob_store=bs,
+            vector_store=vs,
+            live_channel=config.get("live_channel"),
+            eager_blobs=config.get("eager_blobs", False),
+        )
+        from reactivex.disposable import Disposable
+
+        self.register_disposables(Disposable(action=lambda: index.stop()))
         return backend
 
     def list_streams(self) -> list[str]:
@@ -643,27 +565,5 @@ class SqliteSession(Session):
         self._registry_conn.commit()
 
     def stop(self) -> None:
-        super().stop()  # disposes owned backends (closes their connections)
+        super().stop()  # disposes owned index connections
         self._registry_conn.close()
-
-
-# ── SqliteStore ──────────────────────────────────────────────────
-
-
-class SqliteStoreConfig(StoreConfig):
-    """Config for SQLite-backed store."""
-
-    path: str = "memory.db"
-
-
-class SqliteStore(Store):
-    """Store backed by a SQLite database file."""
-
-    default_config: type[SqliteStoreConfig] = SqliteStoreConfig
-    config: SqliteStoreConfig
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-
-    def session(self, **kwargs: Any) -> SqliteSession:
-        return SqliteSession(self.config.path, **kwargs)

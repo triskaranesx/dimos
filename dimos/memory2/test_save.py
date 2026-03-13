@@ -18,17 +18,23 @@ from __future__ import annotations
 
 import pytest
 
-from dimos.memory2.impl.memory import ListBackend
+from dimos.memory2.backend import Backend
+from dimos.memory2.codecs.pickle import PickleCodec
+from dimos.memory2.impl.memory import ListIndex
 from dimos.memory2.stream import Stream
 from dimos.memory2.transform import FnTransformer
-from dimos.memory2.type.backend import Backend, LiveChannel
+from dimos.memory2.type.backend import LiveChannel
 from dimos.memory2.type.observation import Observation
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _make_backend(name: str = "test") -> Backend[int]:
+    return Backend(index=ListIndex[int](name), codec=PickleCodec())
+
+
 def make_stream(n: int = 5, start_ts: float = 0.0) -> Stream[int]:
-    backend = ListBackend[int]("test")
+    backend = _make_backend()
     for i in range(n):
         backend.append(Observation(id=-1, ts=start_ts + i, _data=i * 10))
     return Stream(source=backend)
@@ -40,12 +46,8 @@ def make_stream(n: int = 5, start_ts: float = 0.0) -> Stream[int]:
 
 
 class TestProtocol:
-    def test_list_backend_is_backend(self) -> None:
-        b = ListBackend[int]("x")
-        assert isinstance(b, Backend)
-
-    def test_list_backend_has_live_channel(self) -> None:
-        b = ListBackend[int]("x")
+    def test_backend_has_live_channel(self) -> None:
+        b = _make_backend("x")
         assert isinstance(b.live_channel, LiveChannel)
 
 
@@ -57,8 +59,7 @@ class TestProtocol:
 class TestSave:
     def test_save_populates_target(self) -> None:
         source = make_stream(3)
-        target_backend = ListBackend[int]("target")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("target"))
 
         source.save(target)
 
@@ -68,20 +69,18 @@ class TestSave:
 
     def test_save_returns_target_stream(self) -> None:
         source = make_stream(2)
-        target_backend = ListBackend[int]("target")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("target"))
 
         result = source.save(target)
 
         assert result is target
 
     def test_save_preserves_data(self) -> None:
-        backend = ListBackend[int]("src")
+        backend = _make_backend("src")
         backend.append(Observation(id=-1, ts=1.0, pose=(1, 2, 3), tags={"label": "cat"}, _data=42))
         source = Stream(source=backend)
 
-        target_backend = ListBackend[int]("dst")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("dst"))
         source.save(target)
 
         obs = target.first()
@@ -94,8 +93,7 @@ class TestSave:
         source = make_stream(3)  # data: 0, 10, 20
         doubled = source.transform(FnTransformer(lambda obs: obs.derive(data=obs.data * 2)))
 
-        target_backend = ListBackend[int]("target")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("target"))
         doubled.save(target)
 
         assert [o.data for o in target.fetch()] == [0, 20, 40]
@@ -111,8 +109,7 @@ class TestSave:
     def test_save_target_queryable(self) -> None:
         source = make_stream(5, start_ts=0.0)  # ts: 0,1,2,3,4
 
-        target_backend = ListBackend[int]("target")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("target"))
         result = source.save(target)
 
         after_2 = result.after(2.0).fetch()
@@ -120,8 +117,7 @@ class TestSave:
 
     def test_save_empty_source(self) -> None:
         source = make_stream(0)
-        target_backend = ListBackend[int]("target")
-        target = Stream(source=target_backend)
+        target = Stream(source=_make_backend("target"))
 
         result = source.save(target)
 

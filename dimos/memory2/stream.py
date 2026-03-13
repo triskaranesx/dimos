@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from dimos.core.resource import Resource
 from dimos.memory2.buffer import BackpressureBuffer, KeepLast
 from dimos.memory2.transform import FnIterTransformer, FnTransformer, Transformer
-from dimos.memory2.type.backend import Backend
 from dimos.memory2.type.filter import (
     AfterFilter,
     AtFilter,
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
     import reactivex
     from reactivex.abc import DisposableBase, ObserverBase
 
+    from dimos.memory2.backend import Backend
     from dimos.models.embedding.base import Embedding
 
 T = TypeVar("T")
@@ -176,16 +176,16 @@ class Stream(Resource, Generic[T]):
     def search(self, query: Embedding, k: int) -> Stream[T]:
         """Return top-k observations by cosine similarity to *query*.
 
-        The backend handles the actual computation. ListBackend does
-        brute-force cosine; SqliteBackend (future) pushes down to vec0.
+        The backend handles the actual computation. ListIndex does
+        brute-force cosine; SqliteIndex pushes down to vec0.
         """
         return self._replace_query(search_vec=query, search_k=k)
 
     def search_text(self, text: str) -> Stream[T]:
         """Filter observations whose data contains *text*.
 
-        ListBackend does case-insensitive substring match;
-        SqliteBackend (future) pushes down to FTS5.
+        ListIndex does case-insensitive substring match;
+        SqliteIndex (future) pushes down to FTS5.
         """
         return self._replace_query(search_text=text)
 
@@ -278,7 +278,7 @@ class Stream(Resource, Generic[T]):
 
     def count(self) -> int:
         """Count matching observations."""
-        if isinstance(self._source, Backend):
+        if not isinstance(self._source, Stream):
             return self._source.count(self._query)
         if self.is_live():
             raise TypeError(".count() on a live transform stream would block forever.")

@@ -14,195 +14,103 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import threading
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from dimos.memory2.backend import Backend
 from dimos.memory2.codecs.base import Codec, codec_for
-from dimos.memory2.livechannel.subject import SubjectChannel
-from dimos.memory2.store import Session, Store
-from dimos.memory2.type.backend import BackendConfig
-from dimos.memory2.type.observation import _UNLOADED
-from dimos.protocol.service.spec import Configurable
+from dimos.memory2.store import Store
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from reactivex.abc import DisposableBase
-
-    from dimos.memory2.buffer import BackpressureBuffer
-    from dimos.memory2.type.backend import Backend, LiveChannel
     from dimos.memory2.type.filter import StreamQuery
     from dimos.memory2.type.observation import Observation
 
 T = TypeVar("T")
 
 
-class ListBackend(Configurable[BackendConfig], Generic[T]):
-    """In-memory backend for experimentation. Thread-safe."""
+class ListIndex(Generic[T]):
+    """In-memory index for experimentation. Thread-safe."""
 
-    default_config: type[BackendConfig] = BackendConfig
-
-    def __init__(
-        self, name: str = "<memory>", payload_type: type[Any] | None = None, **kwargs: Any
-    ) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, name: str = "<memory>") -> None:
         self._name = name
         self._observations: list[Observation[T]] = []
         self._next_id = 0
         self._lock = threading.Lock()
-        self._channel: LiveChannel[T] = self.config.live_channel or SubjectChannel()
-        # Resolve codec for blob store
-        self._codec: Codec[Any] | None = None
-        if self.config.blob_store is not None:
-            self._codec = self.config.codec or codec_for(payload_type)
 
     @property
     def name(self) -> str:
         return self._name
 
-    @property
-    def live_channel(self) -> LiveChannel[T]:
-        return self._channel
-
-    def append(self, obs: Observation[T]) -> Observation[T]:
-        # Encode BEFORE lock (avoids holding lock during IO)
-        bs = self.config.blob_store
-        encoded: bytes | None = None
-        if bs is not None and self._codec is not None:
-            encoded = self._codec.encode(obs._data)
-
+    def insert(self, obs: Observation[T]) -> int:
         with self._lock:
             obs.id = self._next_id
+            row_id = self._next_id
             self._next_id += 1
-            if encoded is not None:
-                assert bs is not None
-                bs.put(self._name, obs.id, encoded)
-                # Replace inline data with lazy loader
-                stream_name, key, codec = self._name, obs.id, self._codec
-                assert codec is not None
-                obs._data = _UNLOADED  # type: ignore[assignment]
-                obs._loader = lambda: codec.decode(bs.get(stream_name, key))
             self._observations.append(obs)
+        return row_id
 
-        # Delegate embedding to pluggable vector store
-        vs = self.config.vector_store
-        if vs is not None:
-            emb = getattr(obs, "embedding", None)
-            if emb is not None:
-                vs.put(self._name, obs.id, emb)
-
-        self._channel.notify(obs)
-        return obs
-
-    def iterate(self, query: StreamQuery) -> Iterator[Observation[T]]:
-        """Snapshot + apply all filters/ordering/offset/limit in Python.
-
-        If query.live_buffer is set, subscribes before backfill, then
-        switches to a live tail that blocks for new observations.
-        """
-        if query.search_vec is not None and query.live_buffer is not None:
-            raise TypeError("Cannot combine .search() with .live() — search is a batch operation.")
-        buf = query.live_buffer
-        if buf is not None:
-            # Subscribe BEFORE backfill to avoid missing items
-            sub = self._channel.subscribe(buf)
-            return self._iterate_live(query, buf, sub)
-        return self._iterate_snapshot(query)
-
-    def _iterate_snapshot(self, query: StreamQuery) -> Iterator[Observation[T]]:
+    def query(self, q: StreamQuery) -> Iterator[Observation[T]]:
         with self._lock:
             snapshot = list(self._observations)
 
-        if query.search_vec is not None and self.config.vector_store is not None:
-            it = self._vector_search(snapshot, query)
-        else:
-            it = query.apply(iter(snapshot))
+        # Text search — substring match
+        if q.search_text is not None:
+            needle = q.search_text.lower()
+            it: Iterator[Observation[T]] = (
+                obs for obs in snapshot if needle in str(obs.data).lower()
+            )
+            return q.apply(it)
 
-        if self.config.eager_blobs and self.config.blob_store is not None:
-            for obs in it:
-                _ = obs.data  # trigger lazy loader
-                yield obs
-        else:
-            yield from it
+        return q.apply(iter(snapshot))
 
-    def _vector_search(
-        self, snapshot: list[Observation[T]], query: StreamQuery
-    ) -> Iterator[Observation[T]]:
-        """Use pluggable VectorStore for ANN search, then apply remaining query ops."""
-        vs = self.config.vector_store
-        assert vs is not None  # caller checks
-        assert query.search_vec is not None  # caller checks
+    def count(self, q: StreamQuery) -> int:
+        return sum(1 for _ in self.query(q))
 
-        hits = vs.search(self._name, query.search_vec, query.search_k or len(snapshot))
-
-        # Build results with similarity attached, preserving VectorStore ranking
-        ranked: list[Observation[T]] = []
-        obs_by_id = {obs.id: obs for obs in snapshot}
-        for obs_id, sim in hits:
-            obs = obs_by_id.get(obs_id)
-            if obs is not None:
-                ranked.append(obs.derive(data=obs.data, similarity=sim))
-
-        # Apply remaining query ops (filters, ordering, offset, limit) — skip vector search
-        rest = replace(query, search_vec=None, search_k=None)
-        yield from rest.apply(iter(ranked))
-
-    def _iterate_live(
-        self,
-        query: StreamQuery,
-        buf: BackpressureBuffer[Observation[T]],
-        sub: DisposableBase,
-    ) -> Iterator[Observation[T]]:
-        from dimos.memory2.buffer import ClosedError
-
-        eager = self.config.eager_blobs and self.config.blob_store is not None
-
-        try:
-            # Backfill phase — use snapshot query (without live) for the backfill
-            last_id = -1
-            for obs in self._iterate_snapshot(query):
-                last_id = max(last_id, obs.id)
-                yield obs
-
-            # Live tail
-            filters = query.filters
-            while True:
-                obs = buf.take()
-                if obs.id <= last_id:
-                    continue
-                last_id = obs.id
-                if filters and not all(f.matches(obs) for f in filters):
-                    continue
-                if eager:
-                    _ = obs.data  # trigger lazy loader
-                yield obs
-        except (ClosedError, StopIteration):
-            pass
-        finally:
-            sub.dispose()
-
-    def count(self, query: StreamQuery) -> int:
-        return sum(1 for _ in self.iterate(query))
+    def fetch_by_ids(self, ids: list[int]) -> list[Observation[T]]:
+        id_set = set(ids)
+        with self._lock:
+            return [obs for obs in self._observations if obs.id in id_set]
 
 
-class MemorySession(Session):
-    """In-memory session. Each stream is backed by a ListBackend."""
+class MemoryStore(Store):
+    """In-memory store for experimentation."""
 
     def _create_backend(
         self, name: str, payload_type: type[Any] | None = None, **config: Any
     ) -> Backend[Any]:
-        return ListBackend(name, payload_type=payload_type, **config)
+        index: ListIndex[Any] = ListIndex(name)
+
+        # Resolve codec
+        raw_codec = config.pop("codec", None)
+        codec: Codec[Any]
+        if isinstance(raw_codec, Codec):
+            codec = raw_codec
+        elif isinstance(raw_codec, str):
+            from dimos.memory2.codecs.base import codec_from_id
+
+            module = (
+                f"{payload_type.__module__}.{payload_type.__qualname__}"
+                if payload_type
+                else "builtins.object"
+            )
+            codec = codec_from_id(raw_codec, module)
+        else:
+            codec = codec_for(payload_type)
+
+        backend: Backend[Any] = Backend(
+            index=index,
+            codec=codec,
+            blob_store=config.get("blob_store"),
+            vector_store=config.get("vector_store"),
+            live_channel=config.get("live_channel"),
+            eager_blobs=config.get("eager_blobs", False),
+        )
+        return backend
 
     def list_streams(self) -> list[str]:
         return list(self._streams.keys())
 
     def delete_stream(self, name: str) -> None:
         self._streams.pop(name, None)
-
-
-class MemoryStore(Store):
-    """In-memory store for experimentation."""
-
-    def session(self, **kwargs: Any) -> MemorySession:
-        return MemorySession(**kwargs)

@@ -356,45 +356,36 @@ class TestTransformChaining:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  8. Store & Session
+#  8. Store
 # ═══════════════════════════════════════════════════════════════════
 
 
-class TestStoreSession:
-    """Store -> Session -> Stream hierarchy for named streams."""
+class TestStore:
+    """Store -> Stream hierarchy for named streams."""
 
-    def test_basic_session(self, memory_store):
-        with memory_store.session() as session:
-            images = session.stream("images")
-            images.append("frame1", ts=0.0)
-            images.append("frame2", ts=1.0)
-            assert images.count() == 2
+    def test_basic_store(self, memory_store):
+        images = memory_store.stream("images")
+        images.append("frame1", ts=0.0)
+        images.append("frame2", ts=1.0)
+        assert images.count() == 2
 
     def test_same_stream_on_repeated_calls(self, memory_store):
-        with memory_store.session() as session:
-            s1 = session.stream("images")
-            s2 = session.stream("images")
-            assert s1 is s2
+        s1 = memory_store.stream("images")
+        s2 = memory_store.stream("images")
+        assert s1 is s2
 
-    def test_stream_namespace(self, memory_store):
-        with memory_store.session() as session:
-            session.stream("images")
-            session.stream("lidar")
-            assert "images" in session.streams
-            assert len(session.streams) == 2
-            assert session.streams.images is session.stream("images")
-            assert session.streams["lidar"] is session.stream("lidar")
-
-    def test_namespace_missing_raises(self, memory_store):
-        with memory_store.session() as session:
-            with pytest.raises(AttributeError, match="No stream named"):
-                _ = session.streams.nonexistent
+    def test_list_streams(self, memory_store):
+        memory_store.stream("images")
+        memory_store.stream("lidar")
+        names = memory_store.list_streams()
+        assert "images" in names
+        assert "lidar" in names
+        assert len(names) == 2
 
     def test_delete_stream(self, memory_store):
-        with memory_store.session() as session:
-            session.stream("temp")
-            session.delete_stream("temp")
-            assert "temp" not in session.streams
+        memory_store.stream("temp")
+        memory_store.delete_stream("temp")
+        assert "temp" not in memory_store.list_streams()
 
 
 # ═══════════════════════════════════════════════════════════════════
