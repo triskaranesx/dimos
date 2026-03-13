@@ -187,7 +187,7 @@ class StatusSubApp(SubApp):
         self._launching_run_dir: Path | None = None
         self._stopping: bool = False
         self._stopped_blueprint: str | None = None  # blueprint name after stop (for restart)
-        self._stopped_run_dir: Path | None = None    # run_dir after stop (for log access)
+        self._stopped_run_dir: Path | None = None  # run_dir after stop (for log access)
         self._log_thread: threading.Thread | None = None
         self._stop_log = False
         self._failed_stop_pid: int | None = None
@@ -416,7 +416,11 @@ class StatusSubApp(SubApp):
                 self._debug("-> all instances gone")
                 old_entry = _find_old(self._selected_name) if self._selected_name else None
                 blueprint = getattr(old_entry, "blueprint", self._selected_name)
-                run_dir = Path(old_entry.run_dir) if old_entry and getattr(old_entry, "run_dir", None) else None
+                run_dir = (
+                    Path(old_entry.run_dir)
+                    if old_entry and getattr(old_entry, "run_dir", None)
+                    else None
+                )
                 self._show_stopped("All processes ended", blueprint=blueprint, run_dir=run_dir)
                 return
 
@@ -433,7 +437,11 @@ class StatusSubApp(SubApp):
                     self._show_running()
                 else:
                     blueprint = getattr(old_entry, "blueprint", self._selected_name)
-                    run_dir = Path(old_entry.run_dir) if old_entry and getattr(old_entry, "run_dir", None) else None
+                    run_dir = (
+                        Path(old_entry.run_dir)
+                        if old_entry and getattr(old_entry, "run_dir", None)
+                        else None
+                    )
                     self._show_stopped("Process ended", blueprint=blueprint, run_dir=run_dir)
                 return
 
@@ -471,7 +479,9 @@ class StatusSubApp(SubApp):
         except Exception as e:
             self._debug(f"_show_running_for_entry CRASHED: {e}")
 
-    def _show_stopped(self, message: str = "Stopped", blueprint: str | None = None, run_dir: Path | None = None) -> None:
+    def _show_stopped(
+        self, message: str = "Stopped", blueprint: str | None = None, run_dir: Path | None = None
+    ) -> None:
         """Show controls for a stopped state with logs still visible and restart available."""
         self._launching_name = None
         self._launching_run_dir = None
@@ -486,7 +496,9 @@ class StatusSubApp(SubApp):
         self.query_one("#btn-stop").styles.display = "none"
         self.query_one("#btn-sudo-kill").styles.display = "none"
         # Show restart if we know what blueprint was running
-        self.query_one("#btn-restart").styles.display = "block" if self._stopped_blueprint else "none"
+        self.query_one("#btn-restart").styles.display = (
+            "block" if self._stopped_blueprint else "none"
+        )
         self.query_one("#btn-open-log").styles.display = "block"
         self._failed_stop_pid = None
         status = self.query_one("#runner-status", Static)
@@ -970,8 +982,14 @@ class StatusSubApp(SubApp):
                         self._show_running()
                     else:
                         blueprint = getattr(entry, "blueprint", stop_name)
-                        run_dir = Path(entry.run_dir) if entry and getattr(entry, "run_dir", None) else None
-                        self._show_stopped(f"Stopped {stop_name}", blueprint=blueprint, run_dir=run_dir)
+                        run_dir = (
+                            Path(entry.run_dir)
+                            if entry and getattr(entry, "run_dir", None)
+                            else None
+                        )
+                        self._show_stopped(
+                            f"Stopped {stop_name}", blueprint=blueprint, run_dir=run_dir
+                        )
 
             self.app.call_from_thread(_after_stop)
 

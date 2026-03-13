@@ -115,7 +115,6 @@ class LCMService(Service[LCMConfig]):
             else:
                 self.l = lcm.LCM(self.config.url) if self.config.url else lcm.LCM()
 
-
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._lcm_loop)
         self._thread.daemon = True

@@ -210,11 +210,47 @@ class DIOApp(App[None]):
     # Click-to-focus panel
     # ------------------------------------------------------------------
 
-    def on_click(self, event: Click) -> None:
-        """When a display pane is clicked, focus that panel."""
+    async def on_click(self, event: Click) -> None:
+        """Handle clicks on display panes (focus panel) and sidebar tabs (switch/focus sub-app)."""
+        # Check if a sidebar tab was clicked
+        tab_idx = self._tab_for_widget(event.widget)
+        if tab_idx is not None:
+            await self._on_tab_clicked(tab_idx)
+            return
+        # Otherwise, clicking a display pane focuses that panel
         panel = self._panel_for_widget(event.widget)
         if panel is not None and panel != self._focused_panel:
             self._focus_panel(panel)
+
+    def _tab_for_widget(self, widget: Widget | None) -> int | None:
+        """Return sub-app index if the widget is inside a sidebar tab, or None."""
+        node = widget
+        while node is not None:
+            node_id = getattr(node, "id", None) or ""
+            if node_id.startswith("tab-"):
+                try:
+                    return int(node_id.split("-")[1])
+                except (ValueError, IndexError):
+                    return None
+            node = node.parent
+        return None
+
+    async def _on_tab_clicked(self, tab_idx: int) -> None:
+        """Switch to or focus the sub-app at *tab_idx*."""
+        # Check if this sub-app is already visible in any panel
+        for p in range(self._num_panels):
+            if self._panel_idx[p] == tab_idx:
+                # Already visible — just focus that panel
+                self._focus_panel(p)
+                return
+        # Not visible — switch the focused panel to show this sub-app
+        self._panel_idx[self._focused_panel] = tab_idx
+        await self._place_instances()
+        self._sync_tabs()
+        self._force_focus_subapp(self._instances[tab_idx])
+        self._log(
+            f"[{theme.DEBUG_ACTION}]ACTION[/{theme.DEBUG_ACTION}] tab_click -> show {self._sub_app_classes[tab_idx].TITLE} in panel {self._focused_panel}"
+        )
 
     # ------------------------------------------------------------------
     # Key logging

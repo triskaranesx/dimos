@@ -123,7 +123,9 @@ def configure_system(checks: list[SystemConfigurator], check_only: bool = False)
         summary = "\n".join(all_lines)
     else:
         summary = "  (system configuration)"
-    if not confirm(f"Apply these changes?\n{summary}", default=True, question_id="system-configure"):
+    if not confirm(
+        f"Apply these changes?\n{summary}", default=True, question_id="system-configure"
+    ):
         if any(check.critical for check in failing):
             raise SystemExit(1)
         return

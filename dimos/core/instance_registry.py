@@ -180,9 +180,18 @@ def stop(name: str, force: bool = False) -> tuple[str, bool]:
 
 
 def make_run_dir(name: str) -> Path:
-    """Create ``instances/<name>/runs/<YYYYMMDD-HHMMSS>/`` and return its path."""
+    """Create ``instances/<name>/runs/<YYYYMMDD-HHMMSS>/`` and return its path.
+
+    Appends a numeric suffix (``-2``, ``-3``, ...) when a directory for the
+    current second already exists, preventing collisions from rapid launches.
+    """
     ts = time.strftime("%Y%m%d-%H%M%S")
-    run_dir = _instances_dir() / name / "runs" / ts
+    base = _instances_dir() / name / "runs"
+    run_dir = base / ts
+    suffix = 2
+    while run_dir.exists():
+        run_dir = base / f"{ts}-{suffix}"
+        suffix += 1
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 

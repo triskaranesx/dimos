@@ -1,3 +1,17 @@
+# Copyright 2026 Dimensional Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unified prompts for DimOS.
 
 Usage::
@@ -141,11 +155,7 @@ def sudo_prompt(message: str = "sudo password required") -> bool:
     if result.returncode == 0:
         return True
 
-    # Non-interactive stdin — can't prompt for password
-    if not sys.stdin.isatty():
-        print(f"assuming no for: {message} (cannot prompt for password non-interactively)")
-        return False
-
+    # Try TUI hook first (works even when stdin is not a tty)
     with _lock:
         hook = _dio_sudo_hook
 
@@ -153,6 +163,11 @@ def sudo_prompt(message: str = "sudo password required") -> bool:
         result = hook(message)
         if result is not None:
             return result
+
+    # Non-interactive stdin — can't prompt for password
+    if not sys.stdin.isatty():
+        print(f"assuming no for: {message} (cannot prompt for password non-interactively)")
+        return False
 
     return _terminal_sudo(message)
 
@@ -174,12 +189,22 @@ def _terminal_confirm(message: str, default: bool) -> bool:
         body = Text(message, style="bold #b5e4f4")
 
         console.print()
-        console.print(Panel(body, border_style="#00eeee", padding=(1, 3), title="[bold #00eeee]confirm[/bold #00eeee]", title_align="left"))
+        console.print(
+            Panel(
+                body,
+                border_style="#00eeee",
+                padding=(1, 3),
+                title="[bold #00eeee]confirm[/bold #00eeee]",
+                title_align="left",
+            )
+        )
 
         if default:
             console.print("[bold #00eeee]y[/bold #00eeee][#404040]/n:[/#404040] ", end="")
         else:
-            console.print("[#404040]y/[/#404040][bold #00eeee]n[/bold #00eeee][#404040]:[/#404040] ", end="")
+            console.print(
+                "[#404040]y/[/#404040][bold #00eeee]n[/bold #00eeee][#404040]:[/#404040] ", end=""
+            )
 
         try:
             answer = input().strip().lower()
@@ -210,7 +235,15 @@ def _terminal_sudo(message: str) -> bool:
         console = Console()
         body = Text(message, style="bold #b5e4f4")
         console.print()
-        console.print(Panel(body, border_style="#ffcc00", padding=(1, 3), title="[bold #ffcc00]sudo[/bold #ffcc00]", title_align="left"))
+        console.print(
+            Panel(
+                body,
+                border_style="#ffcc00",
+                padding=(1, 3),
+                title="[bold #ffcc00]sudo[/bold #ffcc00]",
+                title_align="left",
+            )
+        )
     except Exception:
         print(message)
 
@@ -230,5 +263,9 @@ def _terminal_sudo(message: str) -> bool:
         )
         if result.returncode == 0:
             return True
-        print("\033[91mIncorrect password, try again.\033[0m" if attempt < 2 else "\033[91mIncorrect password.\033[0m")
+        print(
+            "\033[91mIncorrect password, try again.\033[0m"
+            if attempt < 2
+            else "\033[91mIncorrect password.\033[0m"
+        )
     return False
