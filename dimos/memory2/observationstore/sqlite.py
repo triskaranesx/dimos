@@ -21,7 +21,6 @@ import threading
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import Field, model_validator
-from reactivex.disposable import Disposable
 
 from dimos.memory2.codecs.base import Codec
 from dimos.memory2.observationstore.base import ObservationStore, ObservationStoreConfig
@@ -35,7 +34,7 @@ from dimos.memory2.type.filter import (
     _xyz,
 )
 from dimos.memory2.type.observation import _UNLOADED, Observation
-from dimos.memory2.utils.sqlite import open_sqlite_connection
+from dimos.memory2.utils.sqlite import open_disposable_sqlite_connection
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -273,8 +272,8 @@ class SqliteObservationStore(ObservationStore[T]):
     def start(self) -> None:
         if self._conn is None:
             assert self._path is not None
-            self._conn = open_sqlite_connection(self._path)
-            self.register_disposables(Disposable(action=lambda: self._conn.close()))
+            disposable, self._conn = open_disposable_sqlite_connection(self._path)
+            self.register_disposables(disposable)
         self._ensure_tables()
 
     def _ensure_tables(self) -> None:

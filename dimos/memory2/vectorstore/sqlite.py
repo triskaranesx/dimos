@@ -19,9 +19,8 @@ import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field, model_validator
-from reactivex.disposable import Disposable
 
-from dimos.memory2.utils.sqlite import open_sqlite_connection
+from dimos.memory2.utils.sqlite import open_disposable_sqlite_connection
 from dimos.memory2.utils.validation import validate_identifier
 from dimos.memory2.vectorstore.base import VectorStore, VectorStoreConfig
 
@@ -76,8 +75,8 @@ class SqliteVectorStore(VectorStore):
     def start(self) -> None:
         if self._conn is None:
             assert self._path is not None
-            self._conn = open_sqlite_connection(self._path)
-            self.register_disposables(Disposable(action=lambda: self._conn.close()))
+            disposable, self._conn = open_disposable_sqlite_connection(self._path)
+            self.register_disposables(disposable)
 
     def put(self, stream_name: str, key: int, embedding: Embedding) -> None:
         vec = embedding.to_numpy().tolist()

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from reactivex.disposable import Disposable
+
 
 def open_sqlite_connection(path: str) -> sqlite3.Connection:
     """Open a WAL-mode SQLite connection with sqlite-vec loaded."""
@@ -28,3 +30,14 @@ def open_sqlite_connection(path: str) -> sqlite3.Connection:
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
     return conn
+
+
+def open_disposable_sqlite_connection(
+    path: str,
+) -> tuple[Disposable, sqlite3.Connection]:
+    """Open a WAL-mode SQLite connection and return (disposable, connection).
+
+    The disposable closes the connection when disposed.
+    """
+    conn = open_sqlite_connection(path)
+    return Disposable(lambda: conn.close()), conn

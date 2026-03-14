@@ -17,8 +17,6 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from reactivex.disposable import Disposable
-
 from dimos.memory2.backend import Backend
 from dimos.memory2.blobstore.base import BlobStore
 from dimos.memory2.blobstore.sqlite import SqliteBlobStore
@@ -26,7 +24,7 @@ from dimos.memory2.codecs.base import codec_id
 from dimos.memory2.observationstore.sqlite import SqliteObservationStore
 from dimos.memory2.registry import RegistryStore, deserialize_component, qual
 from dimos.memory2.store.base import Store, StoreConfig
-from dimos.memory2.utils.sqlite import open_sqlite_connection
+from dimos.memory2.utils.sqlite import open_disposable_sqlite_connection
 from dimos.memory2.utils.validation import validate_identifier
 from dimos.memory2.vectorstore.base import VectorStore
 from dimos.memory2.vectorstore.sqlite import SqliteVectorStore
@@ -52,7 +50,9 @@ class SqliteStore(Store):
 
     def _open_connection(self) -> sqlite3.Connection:
         """Open a new WAL-mode connection with sqlite-vec loaded."""
-        return open_sqlite_connection(self.config.path)
+        disposable, connection = open_disposable_sqlite_connection(self.config.path)
+        self.register_disposables(disposable)
+        return connection
 
     def _assemble_backend(self, name: str, stored: dict[str, Any]) -> Backend[Any]:
         """Reconstruct a Backend from a stored config dict."""
@@ -115,7 +115,6 @@ class SqliteStore(Store):
             notifier=notifier,
             eager_blobs=eager_blobs,
         )
-        self.register_disposables(Disposable(action=lambda: backend_conn.close()))
         return backend
 
     @staticmethod
@@ -159,7 +158,6 @@ class SqliteStore(Store):
             raise TypeError(f"Stream {name!r} does not exist yet — payload_type is required")
 
         backend_conn = self._open_connection()
-        self.register_disposables(Disposable(action=lambda: backend_conn.close()))
 
         # Inject conn-shared instances unless user provided overrides
         if not isinstance(config.get("blob_store"), BlobStore):
