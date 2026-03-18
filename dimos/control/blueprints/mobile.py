@@ -21,23 +21,18 @@ Usage:
 
 from __future__ import annotations
 
-from dimos.control.components import HardwareComponent, HardwareType, make_joints, make_twist_base_joints
+from dimos.control.blueprints._hardware import mock_arm, mock_twist_base
+from dimos.control.components import make_twist_base_joints
 from dimos.control.coordinator import TaskConfig, control_coordinator
 from dimos.core.transport import LCMTransport
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.sensor_msgs.JointState import JointState
 
-# Mock holonomic twist base (3-DOF: vx, vy, wz)
 _base_joints = make_twist_base_joints("base")
+
+# Mock holonomic twist base (3-DOF: vx, vy, wz)
 coordinator_mock_twist_base = control_coordinator(
-    hardware=[
-        HardwareComponent(
-            hardware_id="base",
-            hardware_type=HardwareType.BASE,
-            joints=_base_joints,
-            adapter_type="mock_twist_base",
-        ),
-    ],
+    hardware=[mock_twist_base()],
     tasks=[
         TaskConfig(
             name="vel_base",
@@ -53,24 +48,9 @@ coordinator_mock_twist_base = control_coordinator(
     }
 )
 
-
 # Mock arm (7-DOF) + mock holonomic base (3-DOF)
-_mm_base_joints = make_twist_base_joints("base")
 coordinator_mobile_manip_mock = control_coordinator(
-    hardware=[
-        HardwareComponent(
-            hardware_id="arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("arm", 7),
-            adapter_type="mock",
-        ),
-        HardwareComponent(
-            hardware_id="base",
-            hardware_type=HardwareType.BASE,
-            joints=_mm_base_joints,
-            adapter_type="mock_twist_base",
-        ),
-    ],
+    hardware=[mock_arm(), mock_twist_base()],
     tasks=[
         TaskConfig(
             name="traj_arm",
@@ -81,7 +61,7 @@ coordinator_mobile_manip_mock = control_coordinator(
         TaskConfig(
             name="vel_base",
             type="velocity",
-            joint_names=_mm_base_joints,
+            joint_names=_base_joints,
             priority=10,
         ),
     ],

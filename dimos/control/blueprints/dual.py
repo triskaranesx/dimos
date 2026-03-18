@@ -22,36 +22,17 @@ Usage:
 
 from __future__ import annotations
 
-import os
-
-from dimos.control.components import HardwareComponent, HardwareType, make_joints
+from dimos.control.blueprints._hardware import mock_arm, piper, xarm6, xarm7
 from dimos.control.coordinator import TaskConfig, control_coordinator
 from dimos.core.transport import LCMTransport
 from dimos.msgs.sensor_msgs.JointState import JointState
-
-_XARM7_IP = os.getenv("XARM7_IP")
-_XARM6_IP = os.getenv("XARM6_IP")
-_CAN_PORT = os.getenv("CAN_PORT", "can0")
 
 # Dual mock arms (7-DOF left, 6-DOF right)
 coordinator_dual_mock = control_coordinator(
     tick_rate=100.0,
     publish_joint_state=True,
     joint_state_frame_id="coordinator",
-    hardware=[
-        HardwareComponent(
-            hardware_id="left_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("left_arm", 7),
-            adapter_type="mock",
-        ),
-        HardwareComponent(
-            hardware_id="right_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("right_arm", 6),
-            adapter_type="mock",
-        ),
-    ],
+    hardware=[mock_arm("left_arm", 7), mock_arm("right_arm", 6)],
     tasks=[
         TaskConfig(
             name="traj_left",
@@ -77,24 +58,7 @@ coordinator_dual_xarm = control_coordinator(
     tick_rate=100.0,
     publish_joint_state=True,
     joint_state_frame_id="coordinator",
-    hardware=[
-        HardwareComponent(
-            hardware_id="left_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("left_arm", 7),
-            adapter_type="xarm",
-            address=_XARM7_IP,
-            auto_enable=True,
-        ),
-        HardwareComponent(
-            hardware_id="right_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("right_arm", 6),
-            adapter_type="xarm",
-            address=_XARM6_IP,
-            auto_enable=True,
-        ),
-    ],
+    hardware=[xarm7("left_arm"), xarm6("right_arm")],
     tasks=[
         TaskConfig(
             name="traj_left",
@@ -120,24 +84,7 @@ coordinator_piper_xarm = control_coordinator(
     tick_rate=100.0,
     publish_joint_state=True,
     joint_state_frame_id="coordinator",
-    hardware=[
-        HardwareComponent(
-            hardware_id="xarm_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("xarm_arm", 6),
-            adapter_type="xarm",
-            address=_XARM6_IP,
-            auto_enable=True,
-        ),
-        HardwareComponent(
-            hardware_id="piper_arm",
-            hardware_type=HardwareType.MANIPULATOR,
-            joints=make_joints("piper_arm", 6),
-            adapter_type="piper",
-            address=_CAN_PORT,
-            auto_enable=True,
-        ),
-    ],
+    hardware=[xarm6("xarm_arm"), piper("piper_arm")],
     tasks=[
         TaskConfig(
             name="traj_xarm",
