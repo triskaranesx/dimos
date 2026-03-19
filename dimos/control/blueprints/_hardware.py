@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import os
-
 from dimos.control.components import (
     HardwareComponent,
     HardwareType,
@@ -25,11 +23,12 @@ from dimos.control.components import (
     make_joints,
     make_twist_base_joints,
 )
+from dimos.core.global_config import global_config
 from dimos.utils.data import LfsPath
 
-XARM7_IP = os.getenv("XARM7_IP")
-XARM6_IP = os.getenv("XARM6_IP")
-CAN_PORT = os.getenv("CAN_PORT", "can0")
+XARM7_IP = global_config.xarm7_ip
+XARM6_IP = global_config.xarm6_ip
+CAN_PORT = global_config.can_port
 
 PIPER_MODEL_PATH = LfsPath("piper_description/mujoco_model/piper_no_gripper_description.xml")
 XARM6_MODEL_PATH = LfsPath("xarm_description/urdf/xarm6/xarm6.urdf")
