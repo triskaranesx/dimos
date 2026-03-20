@@ -27,7 +27,6 @@ from dimos.robot.unitree.connection.go2 import go2_connection
 from dimos.robot.unitree_webrtc.keyboard_teleop import keyboard_teleop
 from dimos.robot.unitree_webrtc.unitree_skill_container import unitree_skills
 
-
 basic = autoconnect(go2_connection())
 nav = basic
 standard = nav
