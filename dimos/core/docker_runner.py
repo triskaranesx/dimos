@@ -232,9 +232,7 @@ class DockerModule(ModuleProxyProtocol):
                     timeout=config.docker_pull_timeout,
                 )
                 if r.returncode != 0:
-                    raise RuntimeError(
-                        f"Failed to pull image '{config.docker_image}'."
-                    )
+                    raise RuntimeError(f"Failed to pull image '{config.docker_image}'.")
 
             reconnect = False
             if _is_container_running(config, self._container_name):
