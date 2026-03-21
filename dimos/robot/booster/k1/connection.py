@@ -16,7 +16,7 @@
 
 import asyncio
 import sys
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 import time
 from typing import Any
 
@@ -96,7 +96,6 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
     _video_thread: Thread | None = None
     _latest_video_frame: Image | None = None
     _conn: BoosterConnection | None = None
-    _running: bool = False
 
     @classmethod
     def rerun_views(cls):  # type: ignore[no-untyped-def]
@@ -111,13 +110,14 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._conn_lock = Lock()
+        self._stop_event = Event()
 
     @rpc
     def start(self) -> None:
         super().start()
 
         self._conn = BoosterConnection(ip=self.config.ip)
-        self._running = True
+        self._stop_event.clear()
 
         self._video_thread = Thread(target=self._run_video_stream, daemon=True)
         self._video_thread.start()
@@ -131,7 +131,7 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
 
     @rpc
     def stop(self) -> None:
-        self._running = False
+        self._stop_event.set()
 
         if self._video_thread and self._video_thread.is_alive():
             self._video_thread.join(timeout=3.0)
@@ -153,7 +153,7 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
         try:
             loop.run_until_complete(self._stream_video())
         except Exception:
-            if self._running:
+            if not self._stop_event.is_set():
                 logger.exception("Video stream error")
         finally:
             loop.close()
@@ -167,10 +167,10 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
         JPEG_SOI = b"\xff\xd8"
         JPEG_EOI = b"\xff\xd9"
 
-        while self._running:
+        while not self._stop_event.is_set():
             try:
                 async with websockets.connect(uri, open_timeout=5) as ws:
-                    while self._running:
+                    while not self._stop_event.is_set():
                         data = await ws.recv()
                         if not isinstance(data, bytes):
                             continue
@@ -183,13 +183,13 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
                 logger.warning("Video timeout (%s), retrying in 3s...", uri)
                 await asyncio.sleep(3)
             except Exception as e:
-                if not self._running:
+                if self._stop_event.is_set():
                     break
                 logger.warning("Video error: %s: %s, retrying in 3s...", type(e).__name__, e)
                 await asyncio.sleep(3)
 
     def _on_frame(self, jpeg_bytes: bytes) -> None:
-        if not self._running:
+        if self._stop_event.is_set():
             return
         arr = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         if arr is None:
@@ -199,9 +199,9 @@ class K1Connection(Module[ConnectionConfig], Camera, Pointcloud):
         self._latest_video_frame = image
 
     def _publish_camera_info(self) -> None:
-        while self._running:
+        while not self._stop_event.is_set():
             self.camera_info.publish(self.camera_info_static)
-            time.sleep(1.0)
+            self._stop_event.wait(1.0)
 
     @rpc
     def move(self, twist: Twist, duration: float = 0.0) -> bool:
