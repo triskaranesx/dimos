@@ -173,9 +173,8 @@ class ScanCorrector(Module[ScanCorrectorConfig]):
         base_cols = np.floor(base_pts[:, :2] / res).astype(np.int64)
         base_keys = base_cols[:, 0] + base_cols[:, 1] * 1_000_000
 
-        # Keep base points whose column is NOT in overlay
-        overlay_key_set = set(overlay_keys)
-        mask = np.array([k not in overlay_key_set for k in base_keys], dtype=bool)
+        # Keep base points whose column is NOT in overlay (vectorized)
+        mask = ~np.isin(base_keys, overlay_keys)
 
         surviving = base_pts[mask]
         return np.vstack([surviving, overlay_pts]) if len(surviving) > 0 else overlay_pts
