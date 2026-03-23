@@ -24,9 +24,6 @@ resolution-markers = [
     "(python_full_version < '3.11' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.11' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
 ]
 
-[options]
-prerelease-mode = "allow"
-
 [manifest]
 overrides = [{ name = "pytest", specifier = "==8.3.5" }]
 
@@ -1693,7 +1690,6 @@ dependencies = [
     { name = "lazy-loader" },
     { name = "llvmlite" },
     { name = "lz4" },
-    { name = "matplotlib" },
     { name = "numba" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1720,6 +1716,8 @@ dependencies = [
     { name = "textual" },
     { name = "toolz" },
     { name = "typer" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "xxhash" },
 ]
 
 [package.optional-dependencies]
@@ -1817,6 +1815,7 @@ dds = [
     { name = "types-pysocks" },
     { name = "types-pytz" },
     { name = "types-pyyaml" },
+    { name = "types-requests" },
     { name = "types-simplejson" },
     { name = "types-tabulate" },
     { name = "types-tensorflow" },
@@ -1856,6 +1855,7 @@ dev = [
     { name = "types-pysocks" },
     { name = "types-pytz" },
     { name = "types-pyyaml" },
+    { name = "types-requests" },
     { name = "types-simplejson" },
     { name = "types-tabulate" },
     { name = "types-tensorflow" },
@@ -2048,7 +2048,6 @@ requires-dist = [
     { name = "llvmlite", specifier = ">=0.42.0" },
     { name = "lxml-stubs", marker = "extra == 'dev'", specifier = ">=0.5.1,<1" },
     { name = "lz4", specifier = ">=4.4.5" },
-    { name = "matplotlib", specifier = ">=3.7.1" },
     { name = "matplotlib", marker = "extra == 'docker'" },
     { name = "matplotlib", marker = "extra == 'manipulation'", specifier = ">=3.7.1" },
     { name = "md-babel-py", marker = "extra == 'dev'", specifier = "==1.1.1" },
@@ -2151,16 +2150,17 @@ requires-dist = [
     { name = "types-jsonschema", marker = "extra == 'dev'", specifier = ">=4.25.1.20251009,<5" },
     { name = "types-networkx", marker = "extra == 'dev'", specifier = ">=3.5.0.20251001,<4" },
     { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=6.32.1.20250918,<7" },
-    { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=7.0.0.20251001,<8" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=7.2.2.20260130,<8" },
     { name = "types-psycopg2", marker = "extra == 'dev'", specifier = ">=2.9.21.20251012" },
     { name = "types-pysocks", marker = "extra == 'dev'", specifier = ">=1.7.1.20251001,<2" },
     { name = "types-pytz", marker = "extra == 'dev'", specifier = ">=2025.2.0.20250809,<2026" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250915,<7" },
+    { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32.4.20260107,<3" },
     { name = "types-simplejson", marker = "extra == 'dev'", specifier = ">=3.20.0.20250822,<4" },
     { name = "types-tabulate", marker = "extra == 'dev'", specifier = ">=0.9.0.20241207,<1" },
     { name = "types-tensorflow", marker = "extra == 'dev'", specifier = ">=2.18.0.20251008,<3" },
     { name = "types-tqdm", marker = "extra == 'dev'", specifier = ">=4.67.0.20250809,<5" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.0" },
     { name = "typing-extensions", marker = "extra == 'docker'" },
     { name = "ultralytics", marker = "extra == 'perception'", specifier = ">=8.3.70" },
     { name = "unitree-webrtc-connect-leshy", marker = "extra == 'unitree'", specifier = ">=2.0.7" },
@@ -2170,6 +2170,7 @@ requires-dist = [
     { name = "xarm-python-sdk", marker = "extra == 'manipulation'", specifier = ">=1.17.0" },
     { name = "xarm-python-sdk", marker = "extra == 'misc'", specifier = ">=1.17.0" },
     { name = "xformers", marker = "platform_machine == 'x86_64' and extra == 'cuda'", specifier = ">=0.0.20" },
+    { name = "xxhash", specifier = ">=3.0.0" },
     { name = "yapf", marker = "extra == 'misc'", specifier = "==0.40.2" },
 ]
 provides-extras = ["misc", "visualization", "agents", "web", "perception", "unitree", "manipulation", "cpu", "cuda", "dev", "psql", "sim", "navigation", "drone", "dds", "docker", "base"]
