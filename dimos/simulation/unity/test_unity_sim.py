@@ -65,6 +65,9 @@ class _MockTransport:
         self._subscribers.append(cb)
         return lambda: self._subscribers.remove(cb)
 
+    def stop(self):
+        pass
+
 
 def _wire(module) -> dict[str, _MockTransport]:
     ts = {}
