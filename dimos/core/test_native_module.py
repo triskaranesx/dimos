@@ -96,19 +96,21 @@ def test_process_crash_triggers_stop() -> None:
     mod.pointcloud.transport = LCMTransport("/pc", PointCloud2)
     mod.start()
 
-    assert mod._process is not None
-    pid = mod._process.pid
+    assert mod._proc is not None
+    assert mod._proc.is_alive
+    pid = mod._proc.pid
 
-    # Wait for the process to die and the watchdog to call stop()
+    # Wait for the process to die and the on_exit callback to call stop()
     for _ in range(30):
         time.sleep(0.1)
-        if mod._process is None:
+        if mod._proc is None or not mod._proc.is_alive:
             break
 
-    assert mod._process is None, f"Watchdog did not clean up after process {pid} died"
+    assert mod._proc is None or not mod._proc.is_alive, (
+        f"Watchdog did not clean up after process {pid} died"
+    )
 
-    # Join the watchdog thread. stop() is idempotent but will now join the
-    # watchdog on the second call since the reference is preserved.
+    # stop() is idempotent
     mod.stop()
 
 

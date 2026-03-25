@@ -357,9 +357,10 @@ class TestModuleThread:
     def test_close_timeout_respected(self) -> None:
         """If the thread ignores the stop signal, stop() should return after close_timeout."""
         mod = FakeModule()
+        bail = threading.Event()
 
         def stubborn_target() -> None:
-            time.sleep(10)  # ignores stopping signal
+            bail.wait(timeout=10)  # ignores stopping signal, but we can bail it out
 
         mt = ModuleThread(
             module=mod, target=stubborn_target, name="test-timeout", close_timeout=0.2
@@ -368,6 +369,8 @@ class TestModuleThread:
         mt.stop()
         elapsed = time.monotonic() - start
         assert elapsed < 1.0, f"stop() took {elapsed}s, expected ~0.2s"
+        bail.set()  # let the thread exit so conftest thread-leak detector is happy
+        mt.join(timeout=2)
 
     def test_stop_concurrent_with_dispose(self) -> None:
         """Calling stop() and dispose() concurrently should not crash."""
