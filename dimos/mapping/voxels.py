@@ -15,7 +15,6 @@
 import time
 from typing import Any
 
-import numpy as np
 import open3d as o3d  # type: ignore[import-untyped]
 import open3d.core as o3c  # type: ignore[import-untyped]
 from reactivex.disposable import Disposable
@@ -150,8 +149,8 @@ class VoxelGrid:
     def __len__(self) -> int:
         return self.size()
 
-    def clear(self) -> None:
-        """Free GPU resources."""
+    def dispose(self) -> None:
+        """Free GPU resources. The object is unusable after this call."""
         self.get_global_pointcloud.invalidate_cache(self)  # type: ignore[attr-defined]
         self.get_global_pointcloud2.invalidate_cache(self)  # type: ignore[attr-defined]
         self.vbg = None  # type: ignore[assignment]
@@ -231,14 +230,7 @@ def ensure_tensor_pcd(
         "Input must be a legacy PointCloud or a tensor PointCloud"
     )
 
-    # Legacy CPU point cloud -> tensor
-    if isinstance(pcd_any, o3d.geometry.PointCloud):
-        return o3d.t.geometry.PointCloud.from_legacy(pcd_any, o3c.float32, device)
-
-    pts = np.asarray(pcd_any.points, dtype=np.float32)
-    pcd_t = o3d.t.geometry.PointCloud(device=device)
-    pcd_t.point["positions"] = o3c.Tensor(pts, o3c.float32, device)
-    return pcd_t
+    return o3d.t.geometry.PointCloud.from_legacy(pcd_any, o3c.float32, device)
 
 
 def ensure_legacy_pcd(

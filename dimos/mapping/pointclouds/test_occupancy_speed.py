@@ -37,7 +37,7 @@ def test_build_map():
     with open(pickle_file, "wb") as f:
         pickle.dump(global_pcd, f)
 
-    grid.clear()
+    grid.dispose()
 
 
 def test_costmap_calc():

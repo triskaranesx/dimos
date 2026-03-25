@@ -279,7 +279,7 @@ class Stream(Resource, Generic[T]):
 
     def count(self) -> int:
         """Count matching observations."""
-        if not isinstance(self._source, (Stream, type(None))):
+        if self._source is not None and not isinstance(self._source, Stream):
             return self._source.count(self._query)
         if self.is_live():
             raise TypeError(".count() on a live transform stream would block forever.")
@@ -373,12 +373,14 @@ class Stream(Resource, Generic[T]):
         """
         ops: list[tuple[Transformer[Any, Any] | None, StreamQuery]] = []
         current: Stream[Any] | None | Any = other
+        found_root = False
         while isinstance(current, Stream):
             ops.append((current._xf, current._query))
             if current._source is None:
+                found_root = True
                 break
             current = current._source
-        else:
+        if not found_root:
             raise TypeError("Can only chain an unbound stream (created with Stream())")
 
         result: Stream[Any] = self

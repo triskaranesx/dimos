@@ -31,7 +31,7 @@ from dimos.utils.testing.test_moment import Go2Moment
 def grid() -> Generator[VoxelGrid, None, None]:
     g = VoxelGrid()
     yield g
-    g.clear()
+    g.dispose()
 
 
 class Go2MapperMoment(Go2Moment):
@@ -149,7 +149,7 @@ def test_roundtrip(moment1: Go2MapperMoment, voxel_size: float, expected_points:
     assert len(grid.get_global_pointcloud2()) == len(global1)
 
     moment1.publish()
-    grid.clear()
+    grid.dispose()
 
 
 def test_roundtrip_range_preserved(grid: VoxelGrid) -> None:

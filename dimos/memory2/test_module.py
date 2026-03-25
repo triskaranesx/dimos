@@ -91,7 +91,7 @@ def test_chain_multiple_transforms() -> None:
                 for obs in upstream:
                     yield obs.derive(data=obs.data + 10)
 
-        # Double first, then AddTen: 5 -> 10 -> 20
+        # Double first, then AddTen: (5 * 2) + 10 = 20
         pipeline = Stream().transform(Double()).transform(AddTen())
         result = stream.chain(pipeline).fetch()
 

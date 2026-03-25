@@ -60,7 +60,16 @@ class StreamModule:
         out_name, out_type = output
         _pipeline = pipeline
 
+        # Build annotations dict before class creation so __init_subclass__
+        # and get_type_hints() see them from the start.
+        _annotations = {
+            in_name: In[in_type],  # type: ignore[valid-type]
+            out_name: Out[out_type],  # type: ignore[valid-type]
+        }
+
         class _Module(Module):
+            __annotations__ = _annotations  # type: ignore[var-annotated]
+
             def __init__(self, **kwargs: Any) -> None:
                 from dimos.memory2.store.memory import MemoryStore
 
@@ -92,7 +101,5 @@ class StreamModule:
 
         _Module.__name__ = "StreamModule"
         _Module.__qualname__ = "StreamModule"
-        _Module.__annotations__[in_name] = In[in_type]  # type: ignore[valid-type]
-        _Module.__annotations__[out_name] = Out[out_type]  # type: ignore[valid-type]
 
         return Blueprint.create(_Module, **config_kwargs)

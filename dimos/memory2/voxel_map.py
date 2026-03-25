@@ -44,12 +44,14 @@ class VoxelMap(Transformer[PointCloud2, PointCloud2]):
         block_count: int = 2_000_000,
         device: str = "CUDA:0",
         carve_columns: bool = True,
+        frame_id: str = "world",
         emit_every: int = 1,
     ) -> None:
         self.voxel_size = voxel_size
         self.block_count = block_count
         self.device = device
         self.carve_columns = carve_columns
+        self.frame_id = frame_id
         self.emit_every = emit_every
 
     def _make_obs(
@@ -69,18 +71,22 @@ class VoxelMap(Transformer[PointCloud2, PointCloud2]):
             block_count=self.block_count,
             device=self.device,
             carve_columns=self.carve_columns,
+            frame_id=self.frame_id,
         )
-        last_obs: Observation[PointCloud2] | None = None
-        count = 0
+        try:
+            last_obs: Observation[PointCloud2] | None = None
+            count = 0
 
-        for obs in upstream:
-            grid.add_frame(obs.data)
-            last_obs = obs
-            count += 1
+            for obs in upstream:
+                grid.add_frame(obs.data)
+                last_obs = obs
+                count += 1
 
-            if self.emit_every > 0 and count % self.emit_every == 0:
+                if self.emit_every > 0 and count % self.emit_every == 0:
+                    yield self._make_obs(grid, last_obs, count)
+
+            # Yield on exhaustion: always in batch mode, or if there are un-emitted frames
+            if last_obs is not None and (self.emit_every == 0 or count % self.emit_every != 0):
                 yield self._make_obs(grid, last_obs, count)
-
-        # Yield on exhaustion: always in batch mode, or if there are un-emitted frames
-        if last_obs is not None and (self.emit_every == 0 or count % self.emit_every != 0):
-            yield self._make_obs(grid, last_obs, count)
+        finally:
+            grid.dispose()
