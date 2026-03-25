@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -204,8 +205,11 @@ class ModuleCoordinator(Resource):  # type: ignore[misc]
             raise ValueError("No modules deployed. Call deploy() before build_all_modules().")
 
         def _on_build_errors(
-            _outcomes: list[Any], _successes: list[Any], errors: list[Exception]
+            _outcomes: list[Any], successes: list[Any], errors: list[Exception]
         ) -> None:
+            for mod in successes:
+                with suppress(Exception):
+                    mod.stop()
             raise ExceptionGroup("build_all_modules failed", errors)
 
         safe_thread_map(modules, lambda m: m.build(), _on_build_errors)

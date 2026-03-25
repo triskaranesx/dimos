@@ -13,9 +13,10 @@
 # limitations under the License.
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import sys
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 if sys.version_info < (3, 11):
 
@@ -31,9 +32,6 @@ else:
     import builtins
 
     ExceptionGroup = builtins.ExceptionGroup  # type: ignore[misc]
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
 
 T = TypeVar("T")
 R = TypeVar("R")

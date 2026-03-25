@@ -155,7 +155,8 @@ def _extract_module_config(cfg: DockerModuleConfig) -> dict[str, Any]:
             json.dumps(v)
             out[k] = v
         except (TypeError, ValueError):
-            logger.debug(f"Config field '{k}' not JSON-serializable, skipping")
+            level = "debug" if k.startswith("_") else "warning"
+            getattr(logger, level)(f"Config field '{k}' not JSON-serializable, skipping")
     return out
 
 

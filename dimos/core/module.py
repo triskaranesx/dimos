@@ -30,6 +30,7 @@ from typing import (
 )
 
 from langchain_core.tools import tool
+from pydantic import Field
 from reactivex.disposable import CompositeDisposable
 
 from dimos.core.core import T, rpc
@@ -40,8 +41,6 @@ from dimos.core.resource import Resource
 from dimos.core.rpc_client import RpcCall
 from dimos.core.stream import In, Out, RemoteOut, Transport
 from dimos.protocol.rpc.pubsubrpc import LCMRPC
-from types import MappingProxyType
-
 from dimos.protocol.rpc.spec import DEFAULT_RPC_TIMEOUT, DEFAULT_RPC_TIMEOUTS, RPCSpec
 from dimos.protocol.service.spec import BaseConfig, Configurable
 from dimos.protocol.tf.tf import LCMTF, TFSpec
@@ -82,7 +81,7 @@ def get_loop() -> tuple[asyncio.AbstractEventLoop, threading.Thread | None]:
 class ModuleConfig(BaseConfig):
     rpc_transport: type[RPCSpec] = LCMRPC
     default_rpc_timeout: float = DEFAULT_RPC_TIMEOUT
-    rpc_timeouts: MappingProxyType[str, float] = DEFAULT_RPC_TIMEOUTS
+    rpc_timeouts: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_RPC_TIMEOUTS))
     tf_transport: type[TFSpec] = LCMTF  # type: ignore[type-arg]
     frame_id_prefix: str | None = None
     frame_id: str | None = None
