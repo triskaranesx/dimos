@@ -59,7 +59,7 @@ class Stream(CompositeResource, Generic[T]):
     An *unbound* stream (``Stream()``) records a chain of transforms
     without a real source. Use ``.chain()`` to apply it to a bound stream::
 
-        pipeline = Stream().transform(VoxelMap()).map(postprocess)
+        pipeline = Stream().transform(VoxelMapTransformer()).map(postprocess)
         store.stream("lidar", PointCloud2).live().chain(pipeline)
     """
 
@@ -365,7 +365,7 @@ class Stream(CompositeResource, Generic[T]):
 
         Example::
 
-            lidar.live().transform(VoxelMap()).publish(self.global_map)
+            lidar.live().transform(VoxelMapTransformer()).publish(self.global_map)
         """
         import logging
 
@@ -385,7 +385,7 @@ class Stream(CompositeResource, Generic[T]):
         Extracts the transform/filter chain from *other* (which must be
         unbound) and replays it on top of ``self``::
 
-            pipeline = Stream().transform(VoxelMap()).map(postprocess)
+            pipeline = Stream().transform(VoxelMapTransformer()).map(postprocess)
             store.stream("lidar").live().chain(pipeline)
         """
         ops: list[tuple[Transformer[Any, Any] | None, StreamQuery]] = []

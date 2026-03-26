@@ -41,7 +41,7 @@ class VoxelGrid:
     """Pure voxel grid accumulator using Open3D VoxelBlockGrid.
 
     No Module/framework dependency. Can be used standalone or wrapped
-    by VoxelGridMapper (Module) or VoxelMap (memory2 Transformer).
+    by VoxelGridMapper (Module) or VoxelMapTransformer (memory2 Transformer).
     """
 
     def __init__(
@@ -245,9 +245,9 @@ class VoxelGridMapper(StreamModule[VoxelGridMapperConfig]):
 
     def pipeline(self, stream: Stream[PointCloud2]) -> Stream[PointCloud2]:
         cfg = self.config.model_dump(
-            include=set(VoxelGridMeapperConfig.model_fields) - set(ModuleConfig.model_fields)
+            include=set(VoxelGridMapperConfig.model_fields) - set(ModuleConfig.model_fields)
         )
-        return stream.transform(VoxelMap(**cfg))
+        return stream.transform(VoxelMapTransformer(**cfg))
 
     lidar: In[PointCloud2]
     global_map: Out[PointCloud2]

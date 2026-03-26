@@ -29,7 +29,7 @@ class StreamModule(Module[ModuleConfigT]):
     **Static pipeline**
 
         class VoxelGridMapper(StreamModule):
-            pipeline = Stream().transform(VoxelMap())
+            pipeline = Stream().transform(VoxelMapTransformer())
             lidar: In[PointCloud2]
             global_map: Out[PointCloud2]
 
