@@ -20,7 +20,7 @@ import pytest
 
 from dimos.core.stream import In, Out
 from dimos.memory2.module import StreamModule
-from dimos.memory2.observationstore.null import NullObservationStore
+from dimos.memory2.observationstore.memory import ListObservationStore
 from dimos.memory2.store.memory import MemoryStore
 from dimos.memory2.store.null import NullStore
 from dimos.memory2.stream import Stream
@@ -267,12 +267,12 @@ def test_stream_module_runtime_wiring() -> None:
     assert received == [84]
 
 
-# -- NullObservationStore tests --
+# -- max_size=0 (discard) tests --
 
 
-def test_null_store_monotonic_ids() -> None:
-    """NullObservationStore assigns monotonically increasing IDs."""
-    store = NullObservationStore(name="test")
+def test_max_size_zero_monotonic_ids() -> None:
+    """ListObservationStore(max_size=0) assigns monotonically increasing IDs."""
+    store = ListObservationStore(name="test", max_size=0)
     store.start()
 
     obs = Observation(id=-1, ts=1.0, _data="hello")
@@ -285,11 +285,11 @@ def test_null_store_monotonic_ids() -> None:
     assert id2 == 2
 
 
-def test_null_store_empty_query() -> None:
-    """NullObservationStore.query() always returns empty."""
+def test_max_size_zero_empty_query() -> None:
+    """ListObservationStore(max_size=0) query always returns empty."""
     from dimos.memory2.type.filter import StreamQuery
 
-    store = NullObservationStore(name="test")
+    store = ListObservationStore(name="test", max_size=0)
     store.start()
     store.insert(Observation(id=-1, ts=1.0, _data="data"))
 
@@ -299,7 +299,7 @@ def test_null_store_empty_query() -> None:
 
 
 def test_null_store_discards_history() -> None:
-    """NullStore discards history but still supports live streaming."""
+    """NullStore (max_size=0) discards history but still supports live streaming."""
     store = NullStore()
     with store:
         stream = store.stream("test", int)
@@ -307,6 +307,6 @@ def test_null_store_discards_history() -> None:
         stream.append(2)
         stream.append(3)
 
-        # History is empty — NullObservationStore discards everything
+        # History is empty — max_size=0 discards everything
         assert stream.count() == 0
         assert stream.fetch() == []

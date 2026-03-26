@@ -163,11 +163,9 @@ class ModuleBase(Configurable[ModuleConfigT], Resource):
 
         # Stop transports and break the In/Out -> owner -> self reference
         # cycle so the instance can be freed by refcount instead of waiting for GC.
-        for attr in list(vars(self).values()):
-            if isinstance(attr, (In, Out)):
-                if hasattr(attr, "_transport") and attr._transport is not None:
-                    attr._transport.stop()
-                attr.owner = None
+        for attr in [*self.inputs.values(), *self.outputs.values()]:
+            attr.stop()
+            attr.owner = None
 
     def _close_rpc(self) -> None:
         if self.rpc:

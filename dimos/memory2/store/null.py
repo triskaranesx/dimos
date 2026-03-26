@@ -12,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any
-
-from dimos.memory2.observationstore.null import NullObservationStore
-from dimos.memory2.store.base import Store
+from dimos.memory2.store.memory import MemoryStore
 
 
-class NullStore(Store):
+class NullStore(MemoryStore):
     """Live-only store — O(1) memory, no history/replay.
 
+    Shorthand for ``MemoryStore(max_size=0)``.
     Observations get IDs (for live dedup) but are immediately discarded.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("observation_store", NullObservationStore)
+    def __init__(self, **kwargs):
+        kwargs.setdefault("max_size", 0)
         super().__init__(**kwargs)
