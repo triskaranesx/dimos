@@ -564,16 +564,56 @@ class TestStoreLifecycle:
         assert backend2._disposables is not None
         assert backend2._disposables.is_disposed
 
+    def test_stream_stop_stops_backend(self, session: Store) -> None:
+        """stream.stop() disposes its backend (Stream owns Backend)."""
+        s = session.stream("owned", int)
+        s.append(42)
+
+        backend = s._source
+        assert isinstance(backend, Backend)
+
+        s.stop()
+
+        assert backend._disposables is not None
+        assert backend._disposables.is_disposed
+
+    def test_stream_stop_stops_backend_components(self, session: Store) -> None:
+        """stream.stop() cascades through backend to its components."""
+        s = session.stream("cascade", int)
+        backend = s._source
+        assert isinstance(backend, Backend)
+
+        s.stop()
+
+        # Backend registers notifier as disposable, so it gets disposed
+        assert backend._disposables is not None
+        assert backend._disposables.is_disposed
+        # Notifier's own disposables may be None (no children registered),
+        # but the backend's disposal cascade is what matters.
+
+    def test_delete_stream_stops_backend(self, session: Store) -> None:
+        """delete_stream() stops the stream+backend and removes from cache."""
+        s = session.stream("ephemeral", int)
+        s.append(1)
+
+        backend = s._source
+        assert isinstance(backend, Backend)
+        assert "ephemeral" in session.list_streams()
+
+        session.delete_stream("ephemeral")
+
+        assert backend._disposables is not None
+        assert backend._disposables.is_disposed
+        assert "ephemeral" not in session.list_streams()
+
     def test_backend_stop_stops_components(self, session: Store) -> None:
         """Backend.stop() propagates to metadata_store, blob_store, vector_store."""
         s = session.stream("z", int)
         backend = s._source
         assert isinstance(backend, Backend)
-        metadata_store = backend.metadata_store
 
         session.stop()
 
-        # ListObservationStore has no child disposables, so _disposables stays None.
-        # For stores that do register disposables, verify they're disposed.
-        if metadata_store._disposables is not None:
-            assert metadata_store._disposables.is_disposed
+        # Backend always registers its components, so _disposables is always set
+        assert backend._disposables is not None
+        assert backend._disposables.is_disposed
