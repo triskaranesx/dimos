@@ -42,6 +42,5 @@ class MemoryStore(Store):
             obs: ListObservationStore[Any] = ListObservationStore(
                 name=name, max_size=self.config.max_size
             )
-            obs.start()
             config["observation_store"] = obs
         return super()._create_backend(name, payload_type, **config)
