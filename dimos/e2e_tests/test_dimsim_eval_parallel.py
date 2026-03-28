@@ -17,7 +17,7 @@
 3 dimos instances + 3 headless browser pages, 1 eval workflow each.
 Runs all workflows concurrently, cutting wall-clock time to ~1 min.
 
-    pytest test_sim_eval.py -v -s -m slow
+    pytest test_dimsim_eval_parallel.py -v -s -m slow
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
