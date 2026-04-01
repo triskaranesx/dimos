@@ -37,6 +37,9 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
 from dimos.msgs.nav_msgs.Odometry import Odometry
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.utils.logging_config import setup_logger
+
+logger = setup_logger()
 
 
 class PGOConfig(ModuleConfig):
@@ -502,9 +505,10 @@ class PGO(Module[PGOConfig]):
                     self.global_map._transport.publish(
                         PointCloud2.from_numpy(cloud_np, frame_id="map", timestamp=now)
                     )
-                    print(
-                        f"[PGO] Global map published: {len(cloud_np)} points, "
-                        f"{pgo.num_key_poses} keyframes"
+                    logger.debug(
+                        "Global map published",
+                        points=len(cloud_np),
+                        keyframes=pgo.num_key_poses,
                     )
                 self._last_global_map_time = now
 
