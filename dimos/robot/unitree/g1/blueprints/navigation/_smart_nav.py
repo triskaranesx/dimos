@@ -195,13 +195,10 @@ _smart_nav_sim = autoconnect(
         autonomy_speed=2.0,
         max_acceleration=4.0,
         slow_down_distance_threshold=1.0,
-        # For the G1 omni-dir robot: allow acceleration at any heading diff.
-        # The C++ acceleration check is:
-        #   fabs(dirDiff) < dirDiffThre || (dis < omniDirGoalThre && fabs(dirDiff) < omniDirDiffThre)
-        # With large thresholds, the robot always accelerates in the path direction
-        # (using cos/sin decomposition of heading error).
-        omni_dir_goal_threshold=100.0,  # effectively always use omni-dir mode
-        omni_dir_diff_threshold=3.14,  # ~180° — accelerate at any heading offset
+        # Reference omniDir.yaml: omniDirGoalThre=0.5  dirDiffThre=0.3
+        # Robot should TURN TO FACE movement direction, not slide sideways.
+        # omni-dir strafe only when very close to goal (final positioning).
+        omni_dir_goal_threshold=0.5,
     ),
     FarPlanner.blueprint(
         sensor_range=15.0,
