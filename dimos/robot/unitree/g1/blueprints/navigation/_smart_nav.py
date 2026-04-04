@@ -190,6 +190,7 @@ _smart_nav_sim = autoconnect(
         autonomy_speed=2.0,
         max_acceleration=4.0,
         slow_down_distance_threshold=0.2,
+        omni_dir_goal_threshold=0.0,  # disable strafing — turn to face heading
     ),
     FarPlanner.blueprint(
         sensor_range=30.0,
