@@ -108,14 +108,14 @@ class Detection2DBBox(Detection2D):
         h = hashlib.md5(self.name.encode()).digest()[0]
         bgr = [int(c) for c in cv2.applyColorMap(np.uint8([[h]]), cv2.COLORMAP_HSV)[0][0]]
 
-        thickness = max(1, int(4 * scale))
+        thickness = max(1, int(2 * scale))
         cv2.rectangle(img, (x1, y1), (x2, y2), bgr, thickness)
 
         label = self.name
         if self.confidence < 1.0:
             label = f"{self.name} {self.confidence:.2f}"
-        font_scale = 2 * scale
-        font_thickness = max(1, int(4 * scale))
+        font_scale = 0.5 * scale
+        font_thickness = max(1, int(scale))
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
         cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw + 4, y1), (0, 0, 0), -1)
         cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw + 4, y1), bgr, max(1, int(scale)))

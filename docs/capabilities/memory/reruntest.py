@@ -22,6 +22,7 @@ from dimos.memory2.transform import normalize, smooth
 from dimos.memory2.vis.color import color
 from dimos.memory2.vis.drawing.drawing import Drawing2D
 from dimos.memory2.vis.type import Point
+from dimos.memory2.vis.utils import mosaic
 from dimos.models.embedding.clip import CLIPModel
 from dimos.utils.data import get_data
 
@@ -39,7 +40,8 @@ drawing = Drawing2D()
 # drawing.add(costmap)
 # drawing.add(global_map)
 
-search_vector = clip.embed_text("bottle")
+search_text = "robot"
+search_vector = clip.embed_text(search_text)
 
 # store.streams.color_image.transform(speed()).transform(smooth(30)).transform(normalize()).tap(
 #    lambda obs: drawing.add(Point(obs.pose_stamped, color=color(obs.data, cmap="turbo")))
@@ -70,11 +72,13 @@ florence = Florence2Model()
 florence.start()
 
 search_results = (
-    embedded.search(search_vector, k=15)
+    embedded.search(search_vector, k=18)
     .tap(lambda obs: drawing.add(obs.derive(data=florence.caption(obs.data))))
-    .map(lambda obs: obs.derive(data=moondream.query_detections(obs.data, "bottle")))
+    .map(lambda obs: obs.derive(data=moondream.query_detections(obs.data, search_text)))
     .cache()
 )
+
+drawing.add(mosaic(search_results))
 
 # fmt: off
 search_results \

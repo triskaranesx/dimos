@@ -226,11 +226,12 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
     for i, obs in enumerate(observations):
         path = f"scene/observations/{i}"
         data = obs.data
-        if _is_image(data):
+        img = _as_image(data)
+        if img is not None:
             # Apply base→optical extrinsics for camera frustum rendering
             world_T_optical = Transform.from_pose("world", obs.pose_stamped) + _BASE_TO_OPTICAL
             rr.log(path, world_T_optical.to_pose().to_rerun(), static=True)
-            h, w = data.shape[:2]
+            h, w = img.shape[:2]
             focal = max(w, h)
             rr.log(
                 path,
@@ -242,7 +243,7 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
                 ),
                 static=True,
             )
-            rr.log(f"{path}/image", data.to_rerun(), static=True)
+            rr.log(f"{path}/image", img.to_rerun(), static=True)
         elif isinstance(data, PointCloud2):
             rr.log(path, obs.pose_stamped.to_rerun(), static=True)
             rr.log(f"{path}/pointcloud", data.to_rerun(), static=True)
@@ -252,7 +253,7 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
                 rr.Points3D(
                     positions=[[obs.pose_stamped.x, obs.pose_stamped.y, 0]],
                     labels=[str(data)],
-                    radii=[0.05],
+                    radii=[0.025],
                 ),
                 static=True,
             )
@@ -274,7 +275,7 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
             rr.log(
                 f"{path}/pin",
                 rr.LineStrips3D(
-                    strips=[[[x, y, 0], [x, y, 5.0]]],
+                    strips=[[[x, y, 1.5], [x, y, 3.0]]],
                     colors=[(100, 100, 100)],
                     radii=[0.01],
                 ),
@@ -283,7 +284,7 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
             rr.log(
                 f"{path}/label",
                 rr.Points3D(
-                    positions=[[x, y, 5.0]],
+                    positions=[[x, y, 3.5]],
                     labels=[label],
                     radii=[0.001],
                 ),
@@ -297,13 +298,25 @@ def render(drawing: Drawing2D, app_id: str = "drawing", spawn: bool = True) -> N
             )
 
     for i, obs in enumerate(panels):
-        rr.log(f"scene/panels/{i}", obs.data.to_rerun(), static=True)
+        img = _as_image(obs.data)
+        if img is not None:
+            rr.log(f"scene/panels/{i}", img.to_rerun(), static=True)
+
+
+def _as_image(data: Any) -> Any | None:
+    """Return an Image if data is an Image or ImageDetections, else None."""
+    from dimos.msgs.sensor_msgs.Image import Image
+    from dimos.perception.detection.type.imageDetections import ImageDetections
+
+    if isinstance(data, Image):
+        return data
+    if isinstance(data, ImageDetections):
+        return data.annotated_image()
+    return None
 
 
 def _is_image(data: Any) -> bool:
-    from dimos.msgs.sensor_msgs.Image import Image
-
-    return isinstance(data, Image)
+    return _as_image(data) is not None
 
 
 def _has_image(obs: Observation[Any]) -> bool:
