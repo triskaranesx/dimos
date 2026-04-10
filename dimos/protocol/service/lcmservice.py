@@ -104,47 +104,70 @@ class LCMService(Service):
         self._call_thread_pool = None
         self._call_thread_pool_lock = threading.RLock()
 
-    def start(self) -> None:
-        # Reinitialize LCM if it's None (e.g., after unpickling)
-        if self.l is None:
-            if self.config.lcm:
-                self.l = self.config.lcm
-            else:
-                self.l = lcm_mod.LCM(self.config.url) if self.config.url else lcm_mod.LCM()
+    def _cleanup_owned_lcm(self) -> None:
+        """Dispose of the internally-owned LCM instance."""
+        if self.config.lcm:
+            return
 
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._lcm_loop)
-        self._thread.daemon = True
-        self._thread.start()
+        with self._l_lock:
+            if self.l is not None:
+                del self.l
+                self.l = None
+
+    def start(self) -> None:
+        with self._l_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+
+            # Reinitialize LCM if it's None (e.g., after unpickling)
+            if self.l is None:
+                if self.config.lcm:
+                    self.l = self.config.lcm
+                else:
+                    self.l = lcm_mod.LCM(self.config.url) if self.config.url else lcm_mod.LCM()
+
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._lcm_loop, daemon=True)
+            self._thread.start()
 
     def _lcm_loop(self) -> None:
         """LCM message handling loop."""
-        while not self._stop_event.is_set():
-            try:
+        try:
+            while not self._stop_event.is_set():
                 with self._l_lock:
-                    if self.l is None:
+                    l = self.l
+                    if l is None:
                         break
-                    self.l.handle_timeout(_LCM_LOOP_TIMEOUT)
-            except Exception as e:
-                stack_trace = traceback.format_exc()
-                print(f"Error in LCM handling: {e}\n{stack_trace}")
+                try:
+                    # This doesn't have to be under a lock because the C
+                    # library has its own locking for this.
+                    l.handle_timeout(_LCM_LOOP_TIMEOUT)
+                except Exception as e:
+                    stack_trace = traceback.format_exc()
+                    print(f"Error in LCM handling: {e}\n{stack_trace}")
+        finally:
+            self._cleanup_owned_lcm()
+            with self._l_lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
 
     def stop(self) -> None:
         """Stop the LCM loop."""
         self._stop_event.set()
-        if self._thread is not None:
+        thread = self._thread
+        if thread is not None:
             # Only join if we're not the LCM thread (avoid "cannot join current thread")
-            if threading.current_thread() != self._thread:
-                self._thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
-                if self._thread.is_alive():
+            if threading.current_thread() != thread:
+                thread.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+                if thread.is_alive():
                     logger.warning("LCM thread did not stop cleanly within timeout")
 
-        # Clean up LCM instance if we created it
-        if not self.config.lcm:
-            with self._l_lock:
-                if self.l is not None:
-                    del self.l
-                    self.l = None
+        # If the thread is still alive, do not clean up now. _lcm_loop will
+        # clean up when it exits. If we try to clean up here as well it could
+        # race with the cleanup in _lcm_loop and segfault, and it would leave
+        # the service half-stopped with a live thread but no LCM instance.
+        if thread is None or not thread.is_alive():
+            self._cleanup_owned_lcm()
 
         with self._call_thread_pool_lock:
             if self._call_thread_pool:

@@ -13,12 +13,12 @@
 # limitations under the License.
 
 import threading
-import time
-from unittest.mock import MagicMock, create_autospec, patch
+from unittest.mock import MagicMock, create_autospec
 
 from lcm import LCM
+import pytest
 
-from dimos.protocol.pubsub.impl.lcmpubsub import Topic
+from dimos.protocol.pubsub.impl.lcmpubsub import LCMPubSubBase, Topic
 from dimos.protocol.service.lcmservice import (
     _DEFAULT_LCM_URL,
     LCMConfig,
@@ -34,64 +34,112 @@ from dimos.protocol.service.system_configurator.lcm import (
 )
 from dimos.protocol.service.system_configurator.libpython import LibPythonConfiguratorMacOS
 
-# autoconf tests
+
+class BlockingSubscription:
+    def __init__(self) -> None:
+        self.queue_capacity: int | None = None
+
+    def set_queue_capacity(self, queue_capacity: int) -> None:
+        self.queue_capacity = queue_capacity
+
+
+class BlockingLCM:
+    def __init__(self) -> None:
+        self.handle_entered = threading.Event()
+        self.release_handle = threading.Event()
+        self.publish_called = threading.Event()
+        self.subscribe_called = threading.Event()
+        self.unsubscribe_called = threading.Event()
+        self.subscription = BlockingSubscription()
+
+    def handle_timeout(self, _timeout: int) -> None:
+        self.handle_entered.set()
+        self.release_handle.wait(timeout=1.0)
+
+    def publish(self, _channel: str, _message: bytes) -> None:
+        self.publish_called.set()
+
+    def subscribe(self, _channel: str, _handler) -> BlockingSubscription:
+        self.subscribe_called.set()
+        return self.subscription
+
+    def unsubscribe(self, subscription: BlockingSubscription) -> None:
+        assert subscription is self.subscription
+        self.unsubscribe_called.set()
+
+
+@pytest.fixture
+def patch_platform(mocker):
+    def _patch(system_name: str) -> None:
+        mocker.patch(
+            "dimos.protocol.service.system_configurator.lcm_config.platform.system",
+            return_value=system_name,
+        )
+
+    return _patch
+
+
+@pytest.fixture
+def mock_configure_system(mocker):
+    return mocker.patch("dimos.protocol.service.lcmservice.configure_system")
+
+
+@pytest.fixture
+def mock_lcm_logger(mocker):
+    return mocker.patch("dimos.protocol.service.lcmservice.logger")
+
+
+@pytest.fixture
+def mock_lcm_class(mocker):
+    mock = mocker.patch("dimos.protocol.service.lcmservice.lcm_mod.LCM")
+    mock.return_value = create_autospec(LCM, spec_set=True, instance=True)
+    return mock
+
+
+@pytest.fixture
+def fake_lcm(mocker):
+    fake = BlockingLCM()
+    mocker.patch("dimos.protocol.service.lcmservice.lcm_mod.LCM", return_value=fake)
+    return fake
 
 
 class TestConfigureSystemForLcm:
-    def test_creates_linux_checks_on_linux(self) -> None:
-        with patch(
-            "dimos.protocol.service.system_configurator.lcm_config.platform.system",
-            return_value="Linux",
-        ):
-            with patch("dimos.protocol.service.lcmservice.configure_system") as mock_configure:
-                autoconf()
-                mock_configure.assert_called_once()
-                checks = mock_configure.call_args[0][0]
-                assert len(checks) == 2
-                assert isinstance(checks[0], MulticastConfiguratorLinux)
-                assert isinstance(checks[1], BufferConfiguratorLinux)
-                assert checks[0].loopback_interface == "lo"
+    def test_creates_linux_checks_on_linux(self, patch_platform, mock_configure_system) -> None:
+        patch_platform("Linux")
+        autoconf()
+        mock_configure_system.assert_called_once()
+        checks = mock_configure_system.call_args[0][0]
+        assert len(checks) == 2
+        assert isinstance(checks[0], MulticastConfiguratorLinux)
+        assert isinstance(checks[1], BufferConfiguratorLinux)
+        assert checks[0].loopback_interface == "lo"
 
-    def test_creates_macos_checks_on_darwin(self) -> None:
-        with patch(
-            "dimos.protocol.service.system_configurator.lcm_config.platform.system",
-            return_value="Darwin",
-        ):
-            with patch("dimos.protocol.service.lcmservice.configure_system") as mock_configure:
-                autoconf()
-                mock_configure.assert_called_once()
-                checks = mock_configure.call_args[0][0]
-                assert len(checks) == 4
-                assert isinstance(checks[0], MulticastConfiguratorMacOS)
-                assert isinstance(checks[1], BufferConfiguratorMacOS)
-                assert isinstance(checks[2], MaxFileConfiguratorMacOS)
-                assert isinstance(checks[3], LibPythonConfiguratorMacOS)
-                assert checks[0].loopback_interface == "lo0"
+    def test_creates_macos_checks_on_darwin(self, patch_platform, mock_configure_system) -> None:
+        patch_platform("Darwin")
+        autoconf()
+        mock_configure_system.assert_called_once()
+        checks = mock_configure_system.call_args[0][0]
+        assert len(checks) == 4
+        assert isinstance(checks[0], MulticastConfiguratorMacOS)
+        assert isinstance(checks[1], BufferConfiguratorMacOS)
+        assert isinstance(checks[2], MaxFileConfiguratorMacOS)
+        assert isinstance(checks[3], LibPythonConfiguratorMacOS)
+        assert checks[0].loopback_interface == "lo0"
 
-    def test_passes_check_only_flag(self) -> None:
-        with patch(
-            "dimos.protocol.service.system_configurator.lcm_config.platform.system",
-            return_value="Linux",
-        ):
-            with patch("dimos.protocol.service.lcmservice.configure_system") as mock_configure:
-                autoconf(check_only=True)
-                mock_configure.assert_called_once()
-                assert mock_configure.call_args[1]["check_only"] is True
+    def test_passes_check_only_flag(self, patch_platform, mock_configure_system) -> None:
+        patch_platform("Linux")
+        autoconf(check_only=True)
+        mock_configure_system.assert_called_once()
+        assert mock_configure_system.call_args[1]["check_only"] is True
 
-    def test_logs_error_on_unsupported_system(self) -> None:
-        with patch(
-            "dimos.protocol.service.system_configurator.lcm_config.platform.system",
-            return_value="Windows",
-        ):
-            with patch("dimos.protocol.service.lcmservice.configure_system") as mock_configure:
-                with patch("dimos.protocol.service.lcmservice.logger") as mock_logger:
-                    autoconf()
-                    mock_configure.assert_not_called()
-                    mock_logger.error.assert_called_once()
-                    assert "Windows" in mock_logger.error.call_args[0][0]
-
-
-# LCMConfig tests
+    def test_logs_error_on_unsupported_system(
+        self, patch_platform, mock_configure_system, mock_lcm_logger
+    ) -> None:
+        patch_platform("Windows")
+        autoconf()
+        mock_configure_system.assert_not_called()
+        mock_lcm_logger.error.assert_called_once()
+        assert "Windows" in mock_lcm_logger.error.call_args[0][0]
 
 
 class TestLCMConfig:
@@ -107,9 +155,6 @@ class TestLCMConfig:
         assert config.url == custom_url
 
 
-# Topic tests
-
-
 class TestTopic:
     def test_str_without_lcm_type(self) -> None:
         topic = Topic(topic="my_topic")
@@ -122,167 +167,256 @@ class TestTopic:
         assert str(topic) == "my_topic#TestMessage"
 
 
-# LCMService tests
-
-
 class TestLCMService:
-    def test_init_with_defaults(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+    def test_init_with_defaults(self, mock_lcm_class) -> None:
+        service = LCMService()
+        assert service.config.url == _DEFAULT_LCM_URL
+        assert service.l == mock_lcm_class.return_value
+        mock_lcm_class.assert_called_once_with(_DEFAULT_LCM_URL)
 
-            service = LCMService()
-            assert service.config.url == _DEFAULT_LCM_URL
-            assert service.l == mock_lcm_instance
-            mock_lcm_class.assert_called_once_with(_DEFAULT_LCM_URL)
-
-    def test_init_with_custom_url(self) -> None:
+    def test_init_with_custom_url(self, mock_lcm_class) -> None:
         custom_url = "udpm://192.168.1.1:7777?ttl=1"
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+        LCMService(url=custom_url)
+        mock_lcm_class.assert_called_once_with(custom_url)
 
-            # Pass url as kwarg, not config=
-            LCMService(url=custom_url)
-            mock_lcm_class.assert_called_once_with(custom_url)
-
-    def test_init_with_existing_lcm_instance(self) -> None:
+    def test_init_with_existing_lcm_instance(self, mock_lcm_class) -> None:
         mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
+        service = LCMService(lcm=mock_lcm_instance)
+        mock_lcm_class.assert_not_called()
+        assert service.l == mock_lcm_instance
 
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            # Pass lcm as kwarg
-            service = LCMService(lcm=mock_lcm_instance)
-            mock_lcm_class.assert_not_called()
-            assert service.l == mock_lcm_instance
+    def test_start_and_stop(self, mock_lcm_class) -> None:
+        service = LCMService()
+        service.start()
 
-    def test_start_and_stop(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+        assert service._thread is not None
+        assert service._thread.is_alive()
 
-            service = LCMService()
-            service.start()
+        thread = service._thread
+        service.stop()
 
-            # Verify thread is running
-            assert service._thread is not None
-            assert service._thread.is_alive()
+        assert not thread.is_alive()
+        assert service._thread is None
 
-            service.stop()
+    def test_getstate_excludes_unpicklable_attrs(self, mock_lcm_class) -> None:
+        service = LCMService()
+        state = service.__getstate__()
 
-            # Give the thread a moment to stop
-            time.sleep(0.1)
-            assert not service._thread.is_alive()
+        assert "l" not in state
+        assert "_stop_event" not in state
+        assert "_thread" not in state
+        assert "_l_lock" not in state
+        assert "_call_thread_pool" not in state
+        assert "_call_thread_pool_lock" not in state
 
-    def test_getstate_excludes_unpicklable_attrs(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+    def test_setstate_reinitializes_runtime_attrs(self, mock_lcm_class) -> None:
+        service = LCMService()
+        state = service.__getstate__()
 
-            service = LCMService()
-            state = service.__getstate__()
+        new_service = object.__new__(LCMService)
+        new_service.__setstate__(state)
 
-            assert "l" not in state
-            assert "_stop_event" not in state
-            assert "_thread" not in state
-            assert "_l_lock" not in state
-            assert "_call_thread_pool" not in state
-            assert "_call_thread_pool_lock" not in state
+        assert new_service.l is None
+        assert isinstance(new_service._stop_event, threading.Event)
+        assert new_service._thread is None
+        assert hasattr(new_service._l_lock, "acquire")
+        assert hasattr(new_service._l_lock, "release")
 
-    def test_setstate_reinitializes_runtime_attrs(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+    def test_start_reinitializes_lcm_after_unpickling(self, mock_lcm_class) -> None:
+        service = LCMService()
+        state = service.__getstate__()
 
-            service = LCMService()
-            state = service.__getstate__()
+        new_service = object.__new__(LCMService)
+        new_service.__setstate__(state)
 
-            # Simulate unpickling
-            new_service = object.__new__(LCMService)
-            new_service.__setstate__(state)
+        new_service.start()
 
-            assert new_service.l is None
-            assert isinstance(new_service._stop_event, threading.Event)
-            assert new_service._thread is None
-            # threading.Lock is a factory function, not a type
-            # Just check that the lock exists and has acquire/release methods
-            assert hasattr(new_service._l_lock, "acquire")
-            assert hasattr(new_service._l_lock, "release")
+        assert mock_lcm_class.call_count == 2
 
-    def test_start_reinitializes_lcm_after_unpickling(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+        new_service.stop()
 
-            service = LCMService()
-            state = service.__getstate__()
+    def test_stop_cleans_up_lcm_instance(self, mock_lcm_class) -> None:
+        service = LCMService()
+        service.start()
+        service.stop()
 
-            # Simulate unpickling
-            new_service = object.__new__(LCMService)
-            new_service.__setstate__(state)
-
-            # Start should reinitialize LCM
-            new_service.start()
-
-            # LCM should be created again
-            assert mock_lcm_class.call_count == 2
-
-            new_service.stop()
-
-    def test_stop_cleans_up_lcm_instance(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
-
-            service = LCMService()
-            service.start()
-            service.stop()
-
-            # LCM instance should be cleaned up when we created it
-            assert service.l is None
+        assert service.l is None
 
     def test_stop_preserves_external_lcm_instance(self) -> None:
         mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
 
-        # Pass lcm as kwarg
         service = LCMService(lcm=mock_lcm_instance)
         service.start()
         service.stop()
 
-        # External LCM instance should not be cleaned up
         assert service.l == mock_lcm_instance
 
-    def test_get_call_thread_pool_creates_pool(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
 
-            service = LCMService()
-            assert service._call_thread_pool is None
+@pytest.fixture
+def fake_lcm_service(mock_lcm_class):
+    service = LCMService()
+    service.start()
+    yield service
+    service.stop()
 
-            pool = service._get_call_thread_pool()
-            assert pool is not None
-            assert service._call_thread_pool == pool
 
-            # Should return same pool on subsequent calls
-            pool2 = service._get_call_thread_pool()
-            assert pool2 is pool
+def test_get_call_thread_pool_creates_pool(fake_lcm_service):
+    assert fake_lcm_service._call_thread_pool is None
 
-            # Clean up
-            pool.shutdown(wait=False)
+    pool = fake_lcm_service._get_call_thread_pool()
+    assert pool is not None
+    assert fake_lcm_service._call_thread_pool == pool
 
-    def test_stop_shuts_down_thread_pool(self) -> None:
-        with patch("dimos.protocol.service.lcmservice.lcm_mod.LCM") as mock_lcm_class:
-            mock_lcm_instance = create_autospec(LCM, spec_set=True, instance=True)
-            mock_lcm_class.return_value = mock_lcm_instance
+    pool2 = fake_lcm_service._get_call_thread_pool()
+    assert pool2 is pool
 
-            service = LCMService()
-            service.start()
+    pool.shutdown(wait=False)
 
-            # Create thread pool
-            pool = service._get_call_thread_pool()
-            assert pool is not None
 
-            service.stop()
+def test_stop_shuts_down_thread_pool(mock_lcm_class):
+    service = LCMService()
+    service.start()
+    pool = service._get_call_thread_pool()
+    assert pool is not None
+    service.stop()
+    assert service._call_thread_pool is None
 
-            # Pool should be cleaned up
-            assert service._call_thread_pool is None
+
+def test_start_is_idempotent(fake_lcm_service):
+    fake_lcm_service.start()
+
+    first_thread = fake_lcm_service._thread
+
+    fake_lcm_service.start()
+
+    assert fake_lcm_service._thread is first_thread
+
+
+def test_stop_timeout_preserves_lcm_until_loop_exits(fake_lcm, mocker):
+    mocker.patch("dimos.protocol.service.lcmservice.DEFAULT_THREAD_JOIN_TIMEOUT", 0.01)
+
+    service = LCMService()
+    service.start()
+    assert fake_lcm.handle_entered.wait(timeout=0.5)
+
+    thread = service._thread
+    assert thread is not None
+    service.stop()
+
+    assert service._thread is thread
+    assert thread.is_alive()
+    assert service.l is fake_lcm
+
+    fake_lcm.release_handle.set()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert service.l is None
+    assert service._thread is None
+
+
+@pytest.fixture
+def fake_pub_sub(fake_lcm):
+    pubsub = LCMPubSubBase()
+    pubsub.start()
+    yield pubsub
+    pubsub.stop()
+
+
+def test_publish_proceeds_during_handle_loop(fake_lcm, fake_pub_sub):
+    assert fake_lcm.handle_entered.wait(timeout=0.5)
+
+    publisher = threading.Thread(
+        target=lambda: fake_pub_sub.publish(Topic("/test"), b"payload"),
+        daemon=True,
+    )
+    publisher.start()
+
+    assert fake_lcm.publish_called.wait(timeout=0.5)
+    publisher.join(timeout=1.0)
+    assert not publisher.is_alive()
+
+    fake_lcm.release_handle.set()
+
+
+def test_subscribe_proceeds_during_handle_loop(fake_lcm, fake_pub_sub):
+    assert fake_lcm.handle_entered.wait(timeout=0.5)
+
+    subscriber = threading.Thread(
+        target=lambda: fake_pub_sub.subscribe(Topic("/test"), lambda *_args: None),
+        daemon=True,
+    )
+    subscriber.start()
+
+    assert fake_lcm.subscribe_called.wait(timeout=0.5)
+    subscriber.join(timeout=1.0)
+    assert not subscriber.is_alive()
+    assert fake_lcm.subscription.queue_capacity == 10000
+
+    fake_lcm.release_handle.set()
+
+
+def test_unsubscribe_proceeds_during_handle_loop(fake_lcm, fake_pub_sub):
+    assert fake_lcm.handle_entered.wait(timeout=0.5)
+
+    unsubscribe_holder: dict[str, object] = {}
+
+    def do_subscribe() -> None:
+        unsubscribe_holder["fn"] = fake_pub_sub.subscribe(Topic("/test"), lambda *_args: None)
+
+    subscriber = threading.Thread(target=do_subscribe, daemon=True)
+    subscriber.start()
+    assert fake_lcm.subscribe_called.wait(timeout=0.5)
+    subscriber.join(timeout=1.0)
+    assert not subscriber.is_alive()
+
+    unsubscribe = unsubscribe_holder["fn"]
+    unsub_thread = threading.Thread(target=unsubscribe, daemon=True)  # type: ignore[arg-type]
+    unsub_thread.start()
+
+    assert fake_lcm.unsubscribe_called.wait(timeout=0.5)
+    unsub_thread.join(timeout=1.0)
+    assert not unsub_thread.is_alive()
+
+    fake_lcm.release_handle.set()
+
+
+def test_stop_from_within_lcm_thread(mocker):
+    """stop() called from inside handle_timeout must not deadlock and must
+    let the loop clean up when it eventually exits."""
+    service_holder: dict[str, LCMService] = {}
+    captured: dict[str, threading.Thread] = {}
+
+    class SelfStoppingLCM:
+        def __init__(self) -> None:
+            self.done = threading.Event()
+
+        def handle_timeout(self, _timeout: int) -> None:
+            if not self.done.is_set():
+                captured["thread"] = threading.current_thread()
+                service_holder["service"].stop()
+                self.done.set()
+
+        def publish(self, *_args: object) -> None:
+            pass
+
+        def subscribe(self, *_args: object) -> MagicMock:
+            return MagicMock()
+
+        def unsubscribe(self, *_args: object) -> None:
+            pass
+
+    fake = SelfStoppingLCM()
+    mocker.patch("dimos.protocol.service.lcmservice.lcm_mod.LCM", return_value=fake)
+
+    service = LCMService()
+    service_holder["service"] = service
+    service.start()
+
+    assert fake.done.wait(timeout=2.0)
+
+    thread = captured["thread"]
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert service.l is None
+    assert service._thread is None
