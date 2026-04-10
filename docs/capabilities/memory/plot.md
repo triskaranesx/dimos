@@ -50,7 +50,6 @@ p.to_svg("assets/plot_named.svg")
 ```
 
 
-
 ![output](assets/plot_named.svg)
 
 # speed plot
@@ -92,6 +91,7 @@ plot.add(
 plot.to_svg("assets/plot_robot_data.svg")
 ```
 
+
 ![output](assets/plot_robot_data.svg)
 
 # Filling in gaps
@@ -114,8 +114,6 @@ plantness_query = (
         .search(search_vector)
         # search() returns observations sorted by similarity, we re-sort by time
         .order_by("ts")
-        # extract similarity float — lives on the obs
-        .map_data(lambda obs: obs.similarity)
 )
 
 # we've built our query
@@ -128,9 +126,12 @@ plantness_query_cached = plantness_query.cache()
 print(plantness_query_cached)
 print(plantness_query_cached.summary())
 
+# let's create a numerical stream
+plantness_similarity = plantness_query_cached.map_data(lambda obs: obs.similarity).cache()
+
 plot = Plot()
 
-plot.add(plantness_query_cached,
+plot.add(plantness_similarity,
   label="plant-ness",
   color=color.green,
 )
@@ -140,7 +141,7 @@ plot.to_svg("assets/plot_plantness.svg")
 
 <!--Result:-->
 ```
-Stream("color_image_embedded") | vector_search() | order_by(ts) -> FnTransformer(fn=<lambda>)
+Stream("color_image_embedded") | vector_search() | order_by(ts)
 Stream("cache")
 Stream("cache"): 267 items, 2025-12-26 11:09:11 — 2025-12-26 11:13:59 (288.4s)
 ```
@@ -158,7 +159,7 @@ Let's investigate how our embedding stream relates to image brightness:
 
 plot = Plot()
 
-plot.add(plantness_query_cached,
+plot.add(plantness_similarity,
   label="plant-ness",
   color=color.green,
 )
@@ -186,7 +187,7 @@ Let's now fill the gaps in our semantic graph a bit, looks super ugly above, we 
 plot = Plot()
 
 plot.add(
-    plantness_query_cached.transform(smooth_time(5.0)).transform(normalize()),
+    plantness_similarity.transform(smooth_time(5.0)).transform(normalize()),
     label="plant-ness",
     color=color.green,
     gap_fill=0.0,
@@ -197,7 +198,6 @@ plot.to_svg("assets/plot_plantness_gap_fill.svg")
 
 ```
 
-
 ![output](assets/plot_plantness_gap_fill.svg)
 
 Looks better, these are some very obvious peaks, I'm curious let's see what was captured then.
@@ -207,31 +207,25 @@ from dimos.memory2.transform import peaks
 from dimos.memory2.vis.plot.elements import VLine
 from dimos.memory2.vis.utils import mosaic
 
-# Mark each detected peak with a VLine and grab the image at that moment
-plot = Plot()
-plot.add(
-    plantness_query_cached.transform(normalize()),
-    label="plant-ness",
-    color=color.green,
-    connect=7.5,
-)
-
 peaks = plantness_query_cached.transform(peaks(distance=5.0))
 
 for p in peaks:
-    print(f"t={p.ts - plantness_query_cached.first().ts:6.1f}s  score={p.data:.3f}  prominence={p.tags['peak_prominence']:.3f}")
+    print(f"t={p.ts - plantness_similarity.first().ts:6.1f}s score={p.similarity:.3f} prominence={p.tags['peak_prominence']:.3f}")
     plot.add(VLine(p.ts, color=color.red))
 
 plot.to_svg("assets/plot_plantness_autopeaks.svg")
 
-m = mosaic([images.at(p.ts).first() for p in peaks])
+# peaks is still a stream of image observations (with prominence and semantic similarity metadata)
+# so we can just draw it directly via mosaic that takes image streams
+m = mosaic(peaks)
+
 m.data.save("assets/plants_auto.png")
 ```
 
 <!--Result:-->
 ```
-t=  37.0s  score=0.259  prominence=0.067
-t= 240.4s  score=0.243  prominence=0.047
+t=  37.0s score=0.259 prominence=0.067
+t= 240.4s score=0.243 prominence=0.047
 ```
 
 ![output](assets/plot_plantness_autopeaks.svg)

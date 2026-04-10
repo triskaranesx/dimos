@@ -195,7 +195,7 @@ def peaks(
         items = list(upstream)
         if len(items) < 3:
             return
-        values = [obs.data for obs in items]
+        values = [obs.similarity for obs in items]
 
         # Median sample spacing — used to convert seconds → samples
         # consistently for both `distance` and `width`.
