@@ -41,6 +41,7 @@ Example usage::
 
 from __future__ import annotations
 
+import collections
 import enum
 import inspect
 import json
@@ -57,7 +58,7 @@ from pydantic import Field
 from dimos.constants import DEFAULT_THREAD_JOIN_TIMEOUT
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
-from dimos.utils.change_detect import PathEntry, did_change, update_cache
+from dimos.utils.change_detect import PathEntry, did_change
 from dimos.utils.logging_config import setup_logger
 
 if sys.version_info < (3, 13):
@@ -88,11 +89,11 @@ class NativeModuleConfig(ModuleConfig):
     # Override in subclasses to exclude fields from CLI arg generation
     cli_exclude: frozenset[str] = frozenset({"rebuild_on_change"})
     # Override in subclasses to map field names to custom CLI arg names
-    # (bypasses the automatic snake_case passthrough).
+    # (bypasses the automatic snake_case → camelCase conversion).
     cli_name_override: dict[str, str] = Field(default_factory=dict)
 
     def to_cli_args(self) -> list[str]:
-        """Auto-convert subclass config fields to CLI args.
+        """Convert subclass config fields to CLI args.
 
         Iterates fields defined on the concrete subclass (not NativeModuleConfig
         or its parents) and converts them to ``["--name", str(value)]`` pairs.
@@ -142,15 +143,32 @@ class NativeModule(Module):
     _process: subprocess.Popen[bytes] | None = None
     _watchdog: threading.Thread | None = None
     _stopping: bool = False
+    _stderr_tail: list[str]
+    _stdout_tail: list[str]
+    _tail_lock: threading.Lock
+    _tail_size = 50
+
+    @property
+    def _mod_label(self) -> str:
+        """Short human-readable label: ClassName(executable_basename)."""
+        exe = Path(self.config.executable).name if self.config.executable else "?"
+        return f"{type(self).__name__}({exe})"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._stderr_tail: collections.deque[str] = collections.deque(maxlen=self._tail_size)
+        self._stdout_tail: collections.deque[str] = collections.deque(maxlen=self._tail_size)
+        self._tail_lock = threading.Lock()
         self._resolve_paths()
 
     @rpc
     def start(self) -> None:
         if self._process is not None and self._process.poll() is None:
-            logger.warning("Native process already running", pid=self._process.pid)
+            logger.warning(
+                "Native process already running",
+                module=self._mod_label,
+                pid=self._process.pid,
+            )
             return
 
         self._maybe_build()
@@ -166,70 +184,168 @@ class NativeModule(Module):
         env = {**os.environ, **self.config.extra_env}
         cwd = self.config.cwd or str(Path(self.config.executable).resolve().parent)
 
-        logger.info("Starting native process", cmd=" ".join(cmd), cwd=cwd)
+        # Reset tail buffers for this run.
+        with self._tail_lock:
+            self._stderr_tail.clear()
+            self._stdout_tail.clear()
+
+        logger.info(
+            "Starting native process",
+            module=self._mod_label,
+            cmd=" ".join(cmd),
+            cwd=cwd,
+        )
+        # fix bad-close and leaked process issues
+        def _child_preexec() -> None:
+            """Ensure child is killed when parent dies, and isolate from terminal signals."""
+            import os as _os
+
+            # PR_SET_PDEATHSIG is Linux-only. macOS has no equivalent, so we
+            # skip it there instead of swallowing the libc load failure.
+            if sys.platform.startswith("linux"):
+                import ctypes
+
+                PR_SET_PDEATHSIG = 1
+                libc = ctypes.CDLL("libc.so.6", use_errno=True)
+                if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM) != 0:
+                    err = ctypes.get_errno()
+                    raise OSError(err, f"prctl(PR_SET_PDEATHSIG) failed: {_os.strerror(err)}")
+
+            # Start a new session so terminal SIGINT doesn't reach child.
+            _os.setsid()
+
         self._process = subprocess.Popen(
             cmd,
             env=env,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            preexec_fn=_child_preexec,
         )
-        logger.info("Native process started", pid=self._process.pid)
+        logger.info(
+            "Native process started",
+            module=self._mod_label,
+            pid=self._process.pid,
+        )
 
         self._stopping = False
-        self._watchdog = threading.Thread(target=self._watch_process, daemon=True)
+        self._watchdog = threading.Thread(
+            target=self._watch_process,
+            daemon=True,
+            name=f"native-watchdog-{self._mod_label}",
+        )
         self._watchdog.start()
 
     @rpc
     def stop(self) -> None:
         self._stopping = True
         if self._process is not None and self._process.poll() is None:
-            logger.info("Stopping native process", pid=self._process.pid)
+            logger.info(
+                "Stopping native process",
+                module=self._mod_label,
+                pid=self._process.pid,
+            )
             self._process.send_signal(signal.SIGTERM)
             try:
-                self._process.wait(timeout=self.config.shutdown_timeout)
+                self._process.wait(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
             except subprocess.TimeoutExpired:
                 logger.warning(
-                    "Native process did not exit, sending SIGKILL", pid=self._process.pid
+                    "Native process did not exit, sending SIGKILL",
+                    module=self._mod_label,
+                    pid=self._process.pid,
                 )
                 self._process.kill()
-                self._process.wait(timeout=5)
+                self._process.wait(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         if self._watchdog is not None and self._watchdog is not threading.current_thread():
             self._watchdog.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         self._watchdog = None
-        # Clean up the asyncio loop thread (from ModuleBase) BEFORE
-        # clearing _process — tests use _process=None as their exit
-        # signal, and the loop thread must be joined first.
-        super().stop()
         self._process = None
+        super().stop()
 
     def _watch_process(self) -> None:
         """Block until the native process exits; trigger stop() if it crashed."""
         if self._process is None:
             return
 
-        stdout_t = self._start_reader(self._process.stdout, "info")
-        stderr_t = self._start_reader(self._process.stderr, "warning")
+        stdout_t = self._start_reader(self._process.stdout, "info", self._stdout_tail)
+        stderr_t = self._start_reader(self._process.stderr, "warning", self._stderr_tail)
         rc = self._process.wait()
         stdout_t.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
         stderr_t.join(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
 
         if self._stopping:
+            logger.info(
+                "Native process exited (expected)",
+                module=self._mod_label,
+                pid=self._process.pid,
+                returncode=rc,
+            )
             return
+
+        # Grab the tail for diagnostics.
+        with self._tail_lock:
+            stderr_snapshot = list(self._stderr_tail)
+            stdout_snapshot = list(self._stdout_tail)
+
         logger.error(
             "Native process died unexpectedly",
+            module=self._mod_label,
             pid=self._process.pid,
             returncode=rc,
         )
+
+        # Log the last stderr/stdout lines so the cause is visible.
+        if stderr_snapshot:
+            logger.error(
+                f"Last {len(stderr_snapshot)} stderr lines from {self._mod_label}:",
+                module=self._mod_label,
+                pid=self._process.pid,
+            )
+            for line in stderr_snapshot:
+                logger.error(f"  stderr| {line}", module=self._mod_label)
+
+        if stdout_snapshot and not stderr_snapshot:
+            # Only dump stdout if stderr was empty (avoid double-noise).
+            logger.error(
+                f"Last {len(stdout_snapshot)} stdout lines from {self._mod_label}:",
+                module=self._mod_label,
+                pid=self._process.pid,
+            )
+            for line in stdout_snapshot:
+                logger.error(f"  stdout| {line}", module=self._mod_label)
+
+        if not stderr_snapshot and not stdout_snapshot:
+            logger.error(
+                "No output captured from native process — "
+                "binary may have crashed before producing any output",
+                module=self._mod_label,
+                pid=self._process.pid,
+            )
+
         self.stop()
 
-    def _start_reader(self, stream: IO[bytes] | None, level: str) -> threading.Thread:
+    def _start_reader(
+        self,
+        stream: IO[bytes] | None,
+        level: str,
+        tail_buf: list[str],
+    ) -> threading.Thread:
         """Spawn a daemon thread that pipes a subprocess stream through the logger."""
-        t = threading.Thread(target=self._read_log_stream, args=(stream, level), daemon=True)
+        t = threading.Thread(
+            target=self._read_log_stream,
+            args=(stream, level, tail_buf),
+            daemon=True,
+            name=f"native-reader-{level}-{self._mod_label}",
+        )
         t.start()
         return t
 
-    def _read_log_stream(self, stream: IO[bytes] | None, level: str) -> None:
+    def _read_log_stream(
+        self,
+        stream: IO[bytes] | None,
+        level: str,
+        tail_buf: list[str],
+    ) -> None:
         if stream is None:
             return
         log_fn = getattr(logger, level)
@@ -237,15 +353,24 @@ class NativeModule(Module):
             line = raw.decode("utf-8", errors="replace").rstrip()
             if not line:
                 continue
+
+            # Keep a rolling tail buffer for crash diagnostics.
+            with self._tail_lock:
+                tail_buf.append(line)
+
             if self.config.log_format == LogFormat.JSON:
                 try:
                     data = json.loads(line)
                     event = data.pop("event", line)
-                    log_fn(event, **data)
+                    log_fn(event, module=self._mod_label, **data)
                     continue
                 except (json.JSONDecodeError, TypeError):
-                    logger.warning("malformed JSON from native module", raw=line)
-            log_fn(line, pid=self._process.pid if self._process else None)
+                    logger.warning(
+                        "malformed JSON from native module",
+                        module=self._mod_label,
+                        raw=line,
+                    )
+            log_fn(line, module=self._mod_label, pid=self._process.pid if self._process else None)
         stream.close()
 
     def _resolve_paths(self) -> None:
@@ -260,22 +385,19 @@ class NativeModule(Module):
     def _build_cache_name(self) -> str:
         """Return a stable, unique cache name for this module's build state."""
         source_file = Path(inspect.getfile(type(self))).resolve()
-        return f"native_{source_file}:{type(self).__qualname__}"
+        return f"native_{source_file}"
 
     def _maybe_build(self) -> None:
         """Run ``build_command`` if the executable does not exist or sources changed."""
         exe = Path(self.config.executable)
 
-        # Check if rebuild needed due to source changes.
-        # Use update=False so the cache is NOT written yet — if the build
-        # fails the next check will still detect changes and retry.
+        # Check if rebuild needed due to source changes
         needs_rebuild = False
         if self.config.rebuild_on_change and exe.exists():
             if did_change(
                 self._build_cache_name(),
                 self.config.rebuild_on_change,
                 cwd=self.config.cwd,
-                update=False,
                 extra_hash=self.config.build_command,
             ):
                 logger.info("Source files changed, triggering rebuild", executable=str(exe))
@@ -286,7 +408,7 @@ class NativeModule(Module):
 
         if self.config.build_command is None:
             raise FileNotFoundError(
-                f"Executable not found: {exe}. "
+                f"[{self._mod_label}] Executable not found: {exe}. "
                 "Set build_command in config to auto-build, or build it manually."
             )
 
@@ -308,26 +430,35 @@ class NativeModule(Module):
             stderr=subprocess.PIPE,
         )
         stdout, stderr = proc.communicate()
-        for line in stdout.decode("utf-8", errors="replace").splitlines():
+
+        stdout_lines = stdout.decode("utf-8", errors="replace").splitlines()
+        stderr_lines = stderr.decode("utf-8", errors="replace").splitlines()
+
+        for line in stdout_lines:
             if line.strip():
-                logger.info(line)
-        for line in stderr.decode("utf-8", errors="replace").splitlines():
+                logger.info(line, module=self._mod_label)
+        for line in stderr_lines:
             if line.strip():
-                logger.warning(line)
+                logger.warning(line, module=self._mod_label)
+
         if proc.returncode != 0:
+            # Include the last stderr lines in the exception for RPC callers.
+            tail = [l for l in stderr_lines if l.strip()][-20:]
+            tail_str = "\n".join(tail) if tail else "(no stderr output)"
             raise RuntimeError(
-                f"Build command failed (exit {proc.returncode}): {self.config.build_command}"
+                f"[{self._mod_label}] Build command failed "
+                f"(exit {proc.returncode}): {self.config.build_command}\n"
+                f"--- last stderr ---\n{tail_str}"
             )
         if not exe.exists():
             raise FileNotFoundError(
-                f"Build command succeeded but executable still not found: {exe}"
+                f"[{self._mod_label}] Build command succeeded but executable still not found: {exe}"
             )
 
-        # Seed the cache after a successful build so the next check has a baseline.
-        # Uses update_cache (not did_change) so we only write the hash after a
-        # confirmed-good build — a failed build won't poison the cache.
+        # Seed the cache after a successful build so the next check has a baseline
+        # (needed for the initial build when the pre-build change check was skipped)
         if self.config.rebuild_on_change:
-            update_cache(
+            did_change(
                 self._build_cache_name(),
                 self.config.rebuild_on_change,
                 cwd=self.config.cwd,
