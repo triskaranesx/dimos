@@ -653,6 +653,7 @@ class PointCloud2(Timestamped):
         mode: str = "points",
         size: float | None = None,
         fill_mode: str = "solid",
+        bottom_cutoff: float | None = None,
         **kwargs: object,
     ) -> Archetype:
         """Convert to Rerun archetype for visualization.
@@ -675,6 +676,11 @@ class PointCloud2(Timestamped):
         points = self.points_f32()
         if len(points) == 0:
             return rr.Points3D([]) if mode != "boxes" else rr.Boxes3D(centers=[])
+
+        if bottom_cutoff is not None:
+            points = points[points[:, 2] >= bottom_cutoff]
+            if len(points) == 0:
+                return rr.Points3D([]) if mode != "boxes" else rr.Boxes3D(centers=[])
 
         # Use class_ids for height-based colormap (viewer resolves colors via AnnotationContext)
         # Fall back to explicit colors when provided
