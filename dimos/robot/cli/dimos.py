@@ -220,6 +220,11 @@ async def _run(
 
     cli_config_overrides: dict[str, Any] = ctx.obj
 
+    # Apply overrides early so blueprint module-level code (e.g. viewer
+    # selection) sees the correct global_config values at import time.
+    if cli_config_overrides:
+        global_config.update(**cli_config_overrides)
+
     # Clean stale registry entries
     stale = cleanup_stale()
     if stale:

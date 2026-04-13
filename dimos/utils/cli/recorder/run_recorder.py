@@ -344,7 +344,7 @@ class RecorderApp(App[None]):
 
         if not self._spy:
             return []
-        return [LCMTopic.from_channel_str(ch) for ch in self._spy.topic]
+        return [LCMTopic.from_channel_str(ch) for ch in list(self._spy.topic)]
 
     def _selected_topics(self) -> list[Any]:
         """Map selected stream names back to LCM Topics via the spy."""
@@ -355,7 +355,7 @@ class RecorderApp(App[None]):
             return []
         return [
             LCMTopic.from_channel_str(ch)
-            for ch in self._spy.topic
+            for ch in list(self._spy.topic)
             if topic_to_stream_name(ch) in self._selected
         ]
 
