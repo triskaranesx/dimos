@@ -15,8 +15,8 @@
 """Example ArduinoModule: receives Twist commands, echoes them back.
 
 Demonstrates bidirectional communication between DimOS and an Arduino.
-The Arduino receives Twist commands on ``example_input_topic1``, and echoes back
-the received values on ``example_output_topic2``.
+The Arduino receives Twist commands on ``twist_in`` and echoes them
+back on ``twist_echo_out``.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class TwistEcho(ArduinoModule):
     config: TwistEchoConfig
 
     # DimOS sends Twist commands to the Arduino
-    example_input_topic1: In[Twist]
+    twist_in: In[Twist]
 
     # Arduino echoes them back
-    example_output_topic2: Out[Twist]
+    twist_echo_out: Out[Twist]

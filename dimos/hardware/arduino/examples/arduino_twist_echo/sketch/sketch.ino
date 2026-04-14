@@ -6,7 +6,7 @@
  *   - dimos_init() / dimos_check_message() / dimos_send()
  *   - Switch on dimos_message_topic() to handle different streams
  *   - Using generated encode/decode functions
- *   - Serial.println() going through the debug channel
+ *   - DimosSerial.println() going through the DSP debug channel
  *   - Config values available as #defines
  *
  * NOTE: We use _delay_ms() from <util/delay.h> instead of Arduino's delay()
@@ -23,7 +23,7 @@ uint32_t msg_count = 0;
 
 void setup() {
     dimos_init(DIMOS_BAUDRATE);
-    Serial.println("TwistEcho ready");
+    DimosSerial.println("TwistEcho ready");
 }
 
 void loop() {
@@ -34,24 +34,36 @@ void loop() {
 
         switch (topic) {
 
-        case DIMOS_TOPIC__EXAMPLE_INPUT_TOPIC1: {
+        case DIMOS_TOPIC__TWIST_IN: {
             int decoded = dimos_msg__Twist__decode(data, 0, len, &last_twist);
             if (decoded < 0) {
-                Serial.println("ERR: failed to decode Twist");
+                DimosSerial.println("ERR: failed to decode Twist");
                 break;
             }
 
             msg_count++;
-            Serial.print("Got twist #");
-            Serial.print(msg_count);
-            Serial.print(": linear.x=");
-            Serial.println(last_twist.linear.x);
+            DimosSerial.print("Got twist #");
+            DimosSerial.print(msg_count);
+            DimosSerial.print(": linear.x=");
+            DimosSerial.println(last_twist.linear.x);
 
-            /* Echo it back */
-            uint8_t buf[48];
+            /* Echo it back.  Buffer size must match
+             * dimos_msg__Twist__encoded_size() — we assert at the first
+             * iteration so drift in the wire format is caught loudly
+             * rather than silently truncated. */
+            constexpr int TWIST_BUF_SIZE = 48;
+            static bool size_checked = false;
+            if (!size_checked) {
+                if (dimos_msg__Twist__encoded_size() != TWIST_BUF_SIZE) {
+                    DimosSerial.println("ERR: Twist wire size drift");
+                    break;
+                }
+                size_checked = true;
+            }
+            uint8_t buf[TWIST_BUF_SIZE];
             int encoded = dimos_msg__Twist__encode(buf, 0, sizeof(buf), &last_twist);
             if (encoded > 0) {
-                dimos_send(DIMOS_TOPIC__EXAMPLE_OUTPUT_TOPIC2, buf, encoded);
+                dimos_send(DIMOS_TOPIC__TWIST_ECHO_OUT, buf, encoded);
             }
             break;
         }

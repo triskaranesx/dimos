@@ -23,8 +23,8 @@ Example usage::
 
     class MyArduinoBot(ArduinoModule):
         config: MyArduinoBotConfig
-        imu: Out[Imu]
-        motor_cmd: In[Twist]
+        imu_out: Out[Imu]
+        motor_cmd_in: In[Twist]
 
 See ``dimos/hardware/arduino/`` for the C headers, bridge binary, and
 protocol documentation.
@@ -33,11 +33,19 @@ protocol documentation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
+import fcntl
+import glob
 import inspect
 import json
+import math
+import os
 from pathlib import Path
+import re
 import subprocess
-from typing import Any, ClassVar, get_args, get_origin, get_type_hints
+import tempfile
+import time
+from typing import IO, Any, ClassVar, get_args, get_origin, get_type_hints
 
 from dimos.core.core import rpc
 from dimos.core.native_module import NativeModule, NativeModuleConfig
@@ -51,6 +59,10 @@ _ARDUINO_HW_DIR = Path(__file__).resolve().parent.parent / "hardware" / "arduino
 _COMMON_DIR = _ARDUINO_HW_DIR / "common"
 _DSP_PROTOCOL_PATH = _COMMON_DIR / "dsp_protocol.h"
 
+# Lock file coordinating concurrent `nix build .#arduino_bridge` across
+# ArduinoModule instances in the same blueprint.
+_BRIDGE_BUILD_LOCK_PATH = _ARDUINO_HW_DIR / ".bridge_build.lock"
+
 
 @dataclass
 class CTypeGenerator:
@@ -61,7 +73,12 @@ class CTypeGenerator:
     decode_create: Any | None = None  # Callable[[str, str, int], str]
 
 
-# Registry of known Arduino-compatible message type header paths
+# Registry of known Arduino-compatible message type header paths.
+#
+# This list is kept in sync with two other places:
+#   - dimos/hardware/arduino/cpp/main.cpp :: init_hash_registry()
+#   - dimos/hardware/arduino/common/arduino_msgs/**
+# `tests/test_arduino_msg_registry_sync.py` fails CI if any drift appears.
 _KNOWN_TYPE_HEADERS: dict[str, str] = {
     "std_msgs.Time": "std_msgs/Time.h",
     "std_msgs.Bool": "std_msgs/Bool.h",
@@ -107,6 +124,7 @@ class ArduinoModuleConfig(NativeModuleConfig):
 
     # Virtual mode (QEMU emulator instead of real hardware)
     virtual: bool = False
+    qemu_startup_timeout_s: float = 5.0
 
     # Flash
     auto_flash: bool = True
@@ -124,6 +142,7 @@ class ArduinoModuleConfig(NativeModuleConfig):
             "auto_reconnect",
             "reconnect_interval",
             "virtual",
+            "qemu_startup_timeout_s",
         }
     )
 
@@ -142,6 +161,7 @@ class ArduinoModuleConfig(NativeModuleConfig):
             "auto_flash",
             "flash_timeout",
             "virtual",
+            "qemu_startup_timeout_s",
             "extra_args",
             "extra_env",
             "shutdown_timeout",
@@ -166,8 +186,14 @@ class ArduinoModule(NativeModule):
     c_type_generators: ClassVar[dict[type, CTypeGenerator]] = {}
 
     # Virtual mode state
-    _qemu_proc: subprocess.Popen | None = None
+    _qemu_proc: subprocess.Popen[bytes] | None = None
     _virtual_pty: str | None = None
+    _qemu_log_path: str | None = None
+    _qemu_log_fd: IO[bytes] | None = None
+
+    # Resolved bridge binary path, set by build().  Declared at class scope
+    # so it survives pickling and is visible to mypy.
+    _bridge_bin: str | None = None
 
     @rpc
     def build(self) -> None:
@@ -187,32 +213,52 @@ class ArduinoModule(NativeModule):
         # ArduinoModule subclasses — lives in dimos/hardware/arduino/)
         self._build_bridge()
 
-        # Point NativeModule at the shared bridge binary for start()
-        self.config.executable = str(_ARDUINO_HW_DIR / "result" / "bin" / "arduino_bridge")
+        # Record the resolved bridge path as instance state so start() can
+        # reach it without mutating self.config (which is meant to be the
+        # user-facing, effectively read-only config after build).
+        self._bridge_bin = str(_ARDUINO_HW_DIR / "result" / "bin" / "arduino_bridge")
 
         # 5. Flash Arduino (only for physical hardware)
         if not self.config.virtual and self.config.auto_flash and self.config.port:
             self._flash()
 
     def _build_bridge(self) -> None:
-        """Build the shared C++ bridge binary via the arduino flake."""
-        bridge_bin = _ARDUINO_HW_DIR / "result" / "bin" / "arduino_bridge"
-        if bridge_bin.exists():
-            return
+        """Build the shared C++ bridge binary via the arduino flake.
 
-        logger.info("Building arduino_bridge via nix flake")
-        result = subprocess.run(
-            ["nix", "build", ".#arduino_bridge"],
-            cwd=str(_ARDUINO_HW_DIR),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"arduino_bridge build failed:\n{result.stderr}\n{result.stdout}")
-        if not bridge_bin.exists():
-            raise RuntimeError(f"arduino_bridge build succeeded but binary missing: {bridge_bin}")
-        logger.info("arduino_bridge built successfully", path=str(bridge_bin))
+        Multiple ArduinoModule instances in one blueprint race on
+        `bridge_bin.exists()`.  A file lock serializes them so only one
+        `nix build` runs at a time.
+        """
+        bridge_bin = _ARDUINO_HW_DIR / "result" / "bin" / "arduino_bridge"
+
+        # Ensure the lock file exists (nix flake dir is always present).
+        _BRIDGE_BUILD_LOCK_PATH.touch(exist_ok=True)
+
+        with open(_BRIDGE_BUILD_LOCK_PATH, "w") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            try:
+                if bridge_bin.exists():
+                    return
+
+                logger.info("Building arduino_bridge via nix flake")
+                result = subprocess.run(
+                    ["nix", "build", ".#arduino_bridge"],
+                    cwd=str(_ARDUINO_HW_DIR),
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"arduino_bridge build failed:\n{result.stderr}\n{result.stdout}"
+                    )
+                if not bridge_bin.exists():
+                    raise RuntimeError(
+                        f"arduino_bridge build succeeded but binary missing: {bridge_bin}"
+                    )
+                logger.info("arduino_bridge built successfully", path=str(bridge_bin))
+            finally:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
     @rpc
     def start(self) -> None:
@@ -220,15 +266,18 @@ class ArduinoModule(NativeModule):
         topics = self._collect_topics()
         topic_enum = self._build_topic_enum()
 
-        # If virtual, launch QEMU first and use its PTY as the serial port
+        # If virtual, launch QEMU first and use its PTY as the serial port.
+        # On any failure inside _start_qemu, the helper has already run full
+        # cleanup so we can simply propagate the exception.
         if self.config.virtual:
-            self._start_qemu()
-            serial_port = self._virtual_pty
+            serial_port = self._start_qemu()
         else:
             serial_port = self.config.port or "/dev/ttyACM0"
 
-        # Build extra CLI args for the bridge
-        extra = [
+        # Build extra CLI args for the bridge.  We keep the user's original
+        # `extra_args` (which may be set for debugging) and append the
+        # bridge-specific ones after it.
+        bridge_args = [
             "--serial_port",
             serial_port,
             "--baudrate",
@@ -244,35 +293,94 @@ class ArduinoModule(NativeModule):
                 continue
             lcm_channel = topics[stream_name]
             if stream_name in self.outputs:
-                extra.extend(["--topic_out", str(topic_id), lcm_channel])
+                bridge_args.extend(["--topic_out", str(topic_id), lcm_channel])
             elif stream_name in self.inputs:
-                extra.extend(["--topic_in", str(topic_id), lcm_channel])
+                bridge_args.extend(["--topic_in", str(topic_id), lcm_channel])
 
-        self.config.extra_args = extra
-        super().start()
+        # Point NativeModule at the bridge binary that build() resolved.
+        # This is a stable, idempotent assignment — not a per-call mutation
+        # of user-provided config.
+        if self._bridge_bin is not None:
+            self.config.executable = self._bridge_bin
+
+        # Save and restore the user-facing `extra_args` across the super()
+        # call so repeated start()/stop() cycles don't accumulate bridge
+        # flags on the config.
+        user_extra = list(self.config.extra_args)
+        self.config.extra_args = user_extra + bridge_args
+        try:
+            super().start()
+        except BaseException:
+            # If the bridge itself failed to launch we still need to tear
+            # down any QEMU process we just brought up.
+            self._cleanup_qemu()
+            raise
+        finally:
+            self.config.extra_args = user_extra
 
     @rpc
     def stop(self) -> None:
-        super().stop()
-        # Tear down QEMU if it was launched
+        # Stop the bridge first so it closes the PTY before we terminate
+        # QEMU — otherwise QEMU sits there with a dangling PTY reader for a
+        # brief window.  Wrap in try/finally so QEMU cleanup runs even if
+        # the bridge stop raises.
+        try:
+            super().stop()
+        finally:
+            self._cleanup_qemu()
+
+    def _cleanup_qemu(self) -> None:
+        """Fully tear down QEMU state — process, log fd, temp log file.
+
+        Safe to call even if QEMU was never started or was already
+        partially cleaned up.
+        """
         if self._qemu_proc is not None:
             try:
-                self._qemu_proc.terminate()
-                self._qemu_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._qemu_proc.kill()
-            self._qemu_proc = None
-            self._virtual_pty = None
+                if self._qemu_proc.poll() is None:
+                    self._qemu_proc.terminate()
+                    try:
+                        self._qemu_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._qemu_proc.kill()
+                        try:
+                            self._qemu_proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            logger.error(
+                                "QEMU did not exit after SIGKILL",
+                                pid=self._qemu_proc.pid,
+                            )
+            finally:
+                self._qemu_proc = None
+
+        if self._qemu_log_fd is not None:
+            try:
+                self._qemu_log_fd.close()
+            except OSError:
+                pass
+            self._qemu_log_fd = None
+
+        if self._qemu_log_path is not None:
+            try:
+                os.unlink(self._qemu_log_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning(
+                    "Failed to remove QEMU log file",
+                    path=self._qemu_log_path,
+                    error=str(exc),
+                )
+            self._qemu_log_path = None
+
+        if self._virtual_pty is not None:
             logger.info("QEMU virtual Arduino stopped")
+            self._virtual_pty = None
 
     @rpc
     def flash(self) -> None:
         """Manual re-flash without full rebuild."""
         self._flash()
-
-    # ------------------------------------------------------------------
-    # Private methods
-    # ------------------------------------------------------------------
 
     def _get_stream_types(self) -> dict[str, type]:
         """Get {stream_name: message_type} for all In/Out ports."""
@@ -297,7 +405,14 @@ class ArduinoModule(NativeModule):
         return topic_enum
 
     def _detect_port(self) -> str:
-        """Auto-detect Arduino port using arduino-cli."""
+        """Auto-detect Arduino port using arduino-cli.
+
+        Only returns a port whose FQBN exactly matches the configured
+        board.  On multi-device systems, guessing among unmatched
+        `/dev/ttyACM*` / `/dev/ttyUSB*` candidates is a footgun (picks up
+        printers, USB-serial adapters, etc.) so the unmatched-fallback
+        path now raises with a clear message instead of guessing.
+        """
         try:
             result = subprocess.run(
                 ["arduino-cli", "board", "list", "--format", "json"],
@@ -305,46 +420,38 @@ class ArduinoModule(NativeModule):
                 text=True,
                 timeout=10,
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"arduino-cli board list failed: {result.stderr}")
-
-            boards = json.loads(result.stdout)
-            # Search for matching FQBN
-            for entry in boards.get("detected_ports", boards if isinstance(boards, list) else []):
-                port_info = entry if isinstance(entry, dict) else {}
-                address = port_info.get("port", {}).get("address", "")
-                matching_boards = port_info.get("matching_boards", [])
-                for board in matching_boards:
-                    if board.get("fqbn", "") == self.config.board_fqbn:
-                        return address
-
-            # Fallback: scan for any ttyUSB/ttyACM
-            import glob
-
-            candidates = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
-            if len(candidates) == 1:
-                logger.warning(
-                    "No FQBN match, using only available serial port",
-                    port=candidates[0],
-                )
-                return candidates[0]
-            if candidates:
-                logger.warning(
-                    "No FQBN match, using first serial port",
-                    port=candidates[0],
-                    all_ports=candidates,
-                )
-                return candidates[0]
-
-            raise RuntimeError(
-                f"No Arduino board found matching FQBN '{self.config.board_fqbn}'. "
-                f"Run 'arduino-cli board list' to see connected boards."
-            )
         except FileNotFoundError:
             raise RuntimeError(
                 "arduino-cli not found. Install it or enter the nix dev shell: "
                 "cd dimos/hardware/arduino && nix develop"
             ) from None
+
+        if result.returncode != 0:
+            raise RuntimeError(f"arduino-cli board list failed: {result.stderr}")
+
+        try:
+            boards = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"arduino-cli board list returned invalid JSON: {exc}\n"
+                f"stdout was:\n{result.stdout[:4096]}"
+            ) from exc
+
+        # Search for a port whose matching_boards contains our FQBN.
+        for entry in boards.get("detected_ports", boards if isinstance(boards, list) else []):
+            port_info = entry if isinstance(entry, dict) else {}
+            address = str(port_info.get("port", {}).get("address", ""))
+            matching_boards = port_info.get("matching_boards", [])
+            for board in matching_boards:
+                if board.get("fqbn", "") == self.config.board_fqbn:
+                    return address
+
+        raise RuntimeError(
+            f"No Arduino board found matching FQBN '{self.config.board_fqbn}'. "
+            f"Connected ports: {sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))}. "
+            f"Run 'arduino-cli board list' to see what arduino-cli can see, "
+            f"or set `port=...` explicitly on your module config."
+        )
 
     def _generate_header(self) -> None:
         """Generate dimos_arduino.h from stream declarations + config."""
@@ -378,9 +485,22 @@ class ArduinoModule(NativeModule):
             elif isinstance(val, int):
                 sections.append(f"#define {c_name} {val}")
             elif isinstance(val, float):
+                if not math.isfinite(val):
+                    raise ValueError(
+                        f"Cannot embed non-finite float for config field "
+                        f"'{field_name}' (value={val!r}) in dimos_arduino.h"
+                    )
                 sections.append(f"#define {c_name} {val}f")
             elif isinstance(val, str):
-                sections.append(f'#define {c_name} "{val}"')
+                # json.dumps produces a valid C string literal (escapes ",
+                # \, and non-printables; wraps in double quotes).
+                sections.append(f"#define {c_name} {json.dumps(val)}")
+            else:
+                raise TypeError(
+                    f"Cannot embed config field '{field_name}' of type "
+                    f"{type(val).__name__} in dimos_arduino.h. Add it to "
+                    f"arduino_config_exclude or convert it to str/int/float/bool."
+                )
         sections.append("")
 
         # Topic enum
@@ -487,11 +607,13 @@ class ArduinoModule(NativeModule):
             )
         logger.info("Arduino sketch compiled successfully", build_dir=str(build_dir))
 
-    def _start_qemu(self) -> None:
-        """Launch qemu-system-avr with the compiled sketch and capture its PTY."""
-        import re
-        import tempfile
+    def _start_qemu(self) -> str:
+        """Launch qemu-system-avr with the compiled sketch and return the PTY path.
 
+        On any failure the helper fully tears down everything it allocated
+        (subprocess, log fd, temp file) before raising, so callers can
+        treat the raise as a clean "never started" signal.
+        """
         build_dir = self._build_dir()
         # arduino-cli outputs <sketch_name>.ino.elf
         sketch_name = Path(self.config.sketch_path).stem
@@ -507,12 +629,12 @@ class ArduinoModule(NativeModule):
         }
         machine = machine_map.get(self.config.board_fqbn, "uno")
 
-        # Capture stderr to a temp file so we can parse the PTY path
-        log_file = tempfile.NamedTemporaryFile(
+        # Temp log file for QEMU stderr (where it announces the PTY path).
+        tmp_log = tempfile.NamedTemporaryFile(
             prefix="dimos_qemu_", suffix=".log", delete=False, mode="w"
         )
-        self._qemu_log_path = log_file.name
-        log_file.close()
+        self._qemu_log_path = tmp_log.name
+        tmp_log.close()
 
         cmd = [
             "qemu-system-avr",
@@ -528,37 +650,47 @@ class ArduinoModule(NativeModule):
         ]
 
         logger.info("Starting QEMU virtual Arduino", cmd=" ".join(cmd))
-        log_fd = open(self._qemu_log_path, "w")
-        self._qemu_proc = subprocess.Popen(
-            cmd,
-            stdout=log_fd,
-            stderr=subprocess.STDOUT,
-        )
+        try:
+            self._qemu_log_fd = open(self._qemu_log_path, "wb")
+            self._qemu_proc = subprocess.Popen(
+                cmd,
+                stdout=self._qemu_log_fd,
+                stderr=subprocess.STDOUT,
+            )
 
-        # Poll the log file for the PTY announcement (up to 5 seconds)
-        import time as _time
-
-        deadline = _time.time() + 5.0
-        pty = None
-        while _time.time() < deadline:
-            if self._qemu_proc.poll() is not None:
-                # QEMU exited
+            timeout = self.config.qemu_startup_timeout_s
+            deadline = time.monotonic() + timeout
+            pty: str | None = None
+            while time.monotonic() < deadline:
+                if self._qemu_proc.poll() is not None:
+                    with open(self._qemu_log_path) as f:
+                        raise RuntimeError(
+                            f"QEMU exited unexpectedly before announcing a PTY:\n{f.read()}"
+                        )
                 with open(self._qemu_log_path) as f:
-                    raise RuntimeError(f"QEMU exited unexpectedly:\n{f.read()}")
-            with open(self._qemu_log_path) as f:
-                content = f.read()
-            m = re.search(r"/dev/pts/\d+", content)
-            if m:
-                pty = m.group(0)
-                break
-            _time.sleep(0.1)
+                    content = f.read()
+                m = re.search(r"/dev/pts/\d+", content)
+                if m:
+                    pty = m.group(0)
+                    break
+                time.sleep(0.1)
 
-        if pty is None:
-            self._qemu_proc.terminate()
-            raise RuntimeError("QEMU started but did not announce a PTY within 5 seconds")
+            if pty is None:
+                raise RuntimeError(
+                    f"QEMU started but did not announce a PTY within {timeout:.1f}s. "
+                    f"Increase qemu_startup_timeout_s in the module config if "
+                    f"this is a loaded CI machine. Log tail:\n"
+                    f"{_tail_text(self._qemu_log_path, 2048)}"
+                )
 
-        self._virtual_pty = pty
-        logger.info("QEMU virtual Arduino running", pty=pty, pid=self._qemu_proc.pid)
+            self._virtual_pty = pty
+            logger.info("QEMU virtual Arduino running", pty=pty, pid=self._qemu_proc.pid)
+            return pty
+        except BaseException:
+            # Any error between Popen and "pty is announced" — tear it all
+            # down so the module is in a clean state before we re-raise.
+            self._cleanup_qemu()
+            raise
 
     def _flash(self) -> None:
         """Flash the compiled sketch to the Arduino."""
@@ -587,6 +719,21 @@ class ArduinoModule(NativeModule):
         if result.returncode != 0:
             raise RuntimeError(f"Arduino flash failed:\n{result.stderr}\n{result.stdout}")
         logger.info("Arduino flashed successfully", port=port)
+
+
+def _tail_text(path: str, max_bytes: int) -> str:
+    """Return the last `max_bytes` of `path`, or "" on error."""
+    try:
+        with open(path, "rb") as f:
+            try:
+                f.seek(-max_bytes, os.SEEK_END)
+            except OSError as exc:
+                if exc.errno != errno.EINVAL:
+                    raise
+                f.seek(0)
+            return f.read().decode(errors="replace")
+    except OSError:
+        return ""
 
 
 __all__ = [

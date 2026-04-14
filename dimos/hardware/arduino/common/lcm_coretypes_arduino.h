@@ -23,13 +23,33 @@
  */
 
 /*
- * Use the same include guard as upstream lcm_coretypes.h so that on
- * x86_64 builds (tests, bridge) whichever header is included first wins.
- * Both produce byte-identical output for fixed-size types on x86_64.
- * On AVR the upstream header is never available, so this is the only one.
+ * We have two include guards here:
+ *
+ *   _LCM_LIB_INLINE_ARDUINO_H
+ *     Our unique guard for the Arduino-specific encode/decode helpers
+ *     (int16_t / int32_t / int64_t / float / double paths and the AVR
+ *     double-promotion routines).  Earlier versions reused upstream's
+ *     `_LCM_LIB_INLINE_H` for everything, which left a link-order
+ *     dependency (whoever got included first won).
+ *
+ *   _LCM_LIB_INLINE_H
+ *     Upstream LCM's guard.  We set it below so that when this header is
+ *     included on a host build that ALSO pulls in upstream's
+ *     `lcm_coretypes.h` (e.g. test_wire_compat.cpp includes .hpp headers
+ *     right after our .h headers), upstream skips its definitions of the
+ *     introspection types we duplicate below (`lcm_field_type_t`,
+ *     `_lcm_field_t`, `_lcm_type_info_t`).  Conversely, if upstream runs
+ *     first we detect that below and skip our copies — see the
+ *     `#ifndef _LCM_LIB_INLINE_H` block around the introspection types.
  */
+#ifndef _LCM_LIB_INLINE_ARDUINO_H
+#define _LCM_LIB_INLINE_ARDUINO_H
+
+/* Suppress upstream's version — we provide matching definitions below. */
 #ifndef _LCM_LIB_INLINE_H
 #define _LCM_LIB_INLINE_H
+#define _DSP_ARDUINO_DEFINES_UPSTREAM_TYPES 1
+#endif
 
 #include <stdint.h>
 #include <string.h>
@@ -149,9 +169,12 @@ static inline int __int16_t_encode_array(void *_buf, int offset, int maxlen,
     if (maxlen < total_size)
         return -1;
 
-    const uint16_t *up = (const uint16_t *)p;
+    /* Use memcpy rather than `(const uint16_t*)p` to avoid strict-
+     * aliasing violations — avr-gcc at -O2 will happily miscompile the
+     * cast form. */
     for (i = 0; i < elements; i++) {
-        uint16_t v = up[i];
+        uint16_t v;
+        memcpy(&v, &p[i], sizeof(v));
         buf[pos++] = (uint8_t)((v >> 8) & 0xff);
         buf[pos++] = (uint8_t)(v & 0xff);
     }
@@ -197,9 +220,11 @@ static inline int __int32_t_encode_array(void *_buf, int offset, int maxlen,
     if (maxlen < total_size)
         return -1;
 
-    const uint32_t *up = (const uint32_t *)p;
+    /* Avoid strict-aliasing violation via `(const uint32_t*)p` — use
+     * memcpy, which gcc collapses to a plain load. */
     for (i = 0; i < elements; i++) {
-        uint32_t v = up[i];
+        uint32_t v;
+        memcpy(&v, &p[i], sizeof(v));
         buf[pos++] = (uint8_t)((v >> 24) & 0xff);
         buf[pos++] = (uint8_t)((v >> 16) & 0xff);
         buf[pos++] = (uint8_t)((v >> 8) & 0xff);
@@ -250,9 +275,10 @@ static inline int __int64_t_encode_array(void *_buf, int offset, int maxlen,
     if (maxlen < total_size)
         return -1;
 
-    const uint64_t *up = (const uint64_t *)p;
+    /* memcpy, not `(const uint64_t*)p`, to avoid strict-aliasing UB. */
     for (i = 0; i < elements; i++) {
-        uint64_t v = up[i];
+        uint64_t v;
+        memcpy(&v, &p[i], sizeof(v));
         buf[pos++] = (uint8_t)((v >> 56) & 0xff);
         buf[pos++] = (uint8_t)((v >> 48) & 0xff);
         buf[pos++] = (uint8_t)((v >> 40) & 0xff);
@@ -361,12 +387,16 @@ static inline int __double_encoded_array_size(const double *p, int elements)
     return 8 * elements;  /* always 8 bytes on the wire */
 }
 
-#if defined(__AVR__)
-/* ------- AVR: double is 4 bytes, must promote to 8 on the wire ------- */
-
 /*
- * Minimal float32 → float64 bit conversion (no libm required).
- * Handles: normals, zero, infinity.  Denorms flush to zero.
+ * Pure-math float32↔float64 bit-pattern conversions, used on AVR where
+ * `sizeof(double)==4` to marshal values across the 8-byte-double wire
+ * format.  Exposed unconditionally (not inside `#if __AVR__`) so that
+ * host-side tests can exercise them — the whole point of Paul's
+ * "AVR double path is never tested" critique.
+ *
+ * Handles normals, zero, ±infinity, and propagates NaN sign.  Denorms
+ * flush to zero on both directions (intentional — AVR float has no
+ * denorm range).
  */
 static inline uint64_t _dimos_f32_to_f64_bits(float f)
 {
@@ -417,6 +447,9 @@ static inline float _dimos_f64_bits_to_f32(uint64_t bits)
     dst.u = out;
     return dst.f;
 }
+
+#if defined(__AVR__)
+/* ------- AVR: double is 4 bytes, must promote to 8 on the wire ------- */
 
 static inline int __double_encode_array(void *_buf, int offset, int maxlen,
                                         const double *p, int elements)
@@ -640,9 +673,14 @@ static inline void *lcm_malloc(size_t sz)
 
 /*
  * Introspection types.  Used by LCM C++ generated code.
- * On AVR these are dead code but don't increase binary size
- * (static inline / unused struct definitions are stripped).
+ *
+ * These are defined identically in upstream `lcm_coretypes.h`, so we
+ * only emit them when we're the one pretending to be upstream (i.e. we
+ * set `_LCM_LIB_INLINE_H` ourselves just above).  If upstream was
+ * included first it already defined these, and we must skip to avoid
+ * redefinition errors.
  */
+#ifdef _DSP_ARDUINO_DEFINES_UPSTREAM_TYPES
 typedef enum {
     LCM_FIELD_INT8_T,
     LCM_FIELD_INT16_T,
@@ -689,6 +727,7 @@ struct _lcm_type_info_t {
     lcm_get_field_t get_field;
     lcm_get_hash_t get_hash;
 };
+#endif /* _DSP_ARDUINO_DEFINES_UPSTREAM_TYPES */
 
 #ifdef __cplusplus
 }
@@ -699,4 +738,4 @@ struct _lcm_type_info_t {
 #endif
 #endif
 
-#endif /* _LCM_LIB_INLINE_H */
+#endif /* _LCM_LIB_INLINE_ARDUINO_H */

@@ -44,14 +44,17 @@
 #include "dsp_protocol.h"
 
 /* ======================================================================
- * Globals
+ * Bridge state
+ *
+ * One Bridge per process.  All state the threads and signal handler touch
+ * lives here so the signal handler only needs a single pointer and so the
+ * relationship between "user asked us to quit" (`running`) and "serial link
+ * is up" (`serial_connected`) is explicit.
  * ====================================================================== */
 
-static std::atomic<bool> g_running{true};
-static int g_serial_fd = -1;
-static std::mutex g_serial_write_mutex;
-
-/* Topic mapping */
+/* Topic mapping — owned via unique_ptr so that raw pointers stored in the
+ * lookup maps (and in RawHandler::tm) are never invalidated by reallocation
+ * of the containing vector. */
 struct TopicMapping {
     uint8_t topic_id;
     std::string lcm_channel;    /* full "name#msg_type" */
@@ -59,21 +62,46 @@ struct TopicMapping {
     std::vector<uint8_t> fingerprint;  /* 8-byte hash, computed at startup */
 };
 
-static std::vector<TopicMapping> g_topics;
-static lcm::LCM *g_lcm = nullptr;
+/* Forward decl — RawHandler body is below the Bridge so it can reference it. */
+class RawHandler;
 
-/* Config */
-static std::string g_serial_port;
-static int g_baudrate = 115200;
-static bool g_reconnect = true;
-static float g_reconnect_interval = 2.0f;
+struct Bridge {
+    /* Shutdown: user hit ^C or sent SIGTERM.  Process-lifetime. */
+    std::atomic<bool> running{true};
+    /* Serial link currently open and threads may use g_serial_fd.  Cycles
+     * per reconnect. */
+    std::atomic<bool> serial_connected{false};
+
+    int serial_fd{-1};
+    std::mutex serial_write_mutex;
+
+    std::vector<std::unique_ptr<TopicMapping>> topics;
+
+    lcm::LCM *lcm{nullptr};
+    std::map<std::string, int64_t> hash_registry;
+
+    std::map<uint8_t, TopicMapping *> topic_out_map;
+    std::map<std::string, TopicMapping *> topic_in_map;
+    std::vector<std::unique_ptr<RawHandler>> raw_handlers;
+
+    std::string serial_port;
+    int baudrate{115200};
+    bool reconnect{true};
+    float reconnect_interval{2.0f};
+};
+
+/* Single process-global pointer the signal handler touches.  All other
+ * code takes the Bridge by reference. */
+static Bridge *g_bridge = nullptr;
 
 /* ======================================================================
  * CLI Parsing
  * ====================================================================== */
 
-static speed_t baud_to_speed(int baud)
+/* Returns the termios speed constant for `baud`, or -1 if unsupported. */
+static speed_t baud_to_speed(int baud, bool *ok)
 {
+    *ok = true;
     switch (baud) {
         case 9600:    return B9600;
         case 19200:   return B19200;
@@ -87,31 +115,42 @@ static speed_t baud_to_speed(int baud)
         case 921600:  return B921600;
         case 1000000: return B1000000;
         default:
-            fprintf(stderr, "[bridge] Unsupported baud rate: %d\n", baud);
-            return B115200;
+            *ok = false;
+            return B0;
     }
 }
 
-static void parse_args(int argc, char **argv)
+/* `exit(1)` on unknown flags, missing required arg values, or unsupported
+ * baud rates.  Silently falling back to a default is a footgun. */
+static void parse_args(Bridge &b, int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
         std::string arg(argv[i]);
 
         if (arg == "--serial_port" && i + 1 < argc) {
-            g_serial_port = argv[++i];
+            b.serial_port = argv[++i];
         } else if (arg == "--baudrate" && i + 1 < argc) {
-            g_baudrate = std::atoi(argv[++i]);
+            b.baudrate = std::atoi(argv[++i]);
+            bool ok;
+            (void)baud_to_speed(b.baudrate, &ok);
+            if (!ok) {
+                fprintf(stderr, "[bridge] Unsupported baud rate: %d\n", b.baudrate);
+                exit(1);
+            }
         } else if (arg == "--reconnect" && i + 1 < argc) {
             std::string val(argv[++i]);
-            g_reconnect = (val == "true" || val == "1");
+            b.reconnect = (val == "true" || val == "1");
         } else if (arg == "--reconnect_interval" && i + 1 < argc) {
-            g_reconnect_interval = std::atof(argv[++i]);
+            b.reconnect_interval = std::atof(argv[++i]);
         } else if ((arg == "--topic_out" || arg == "--topic_in") && i + 2 < argc) {
-            TopicMapping tm;
-            tm.topic_id = (uint8_t)std::atoi(argv[++i]);
-            tm.lcm_channel = argv[++i];
-            tm.is_output = (arg == "--topic_out");
-            g_topics.push_back(tm);
+            auto tm = std::make_unique<TopicMapping>();
+            tm->topic_id = (uint8_t)std::atoi(argv[++i]);
+            tm->lcm_channel = argv[++i];
+            tm->is_output = (arg == "--topic_out");
+            b.topics.push_back(std::move(tm));
+        } else {
+            fprintf(stderr, "[bridge] Unknown or malformed argument: %s\n", arg.c_str());
+            exit(1);
         }
     }
 }
@@ -153,32 +192,38 @@ static void parse_args(int argc, char **argv)
 #include "geometry_msgs/TwistWithCovariance.hpp"
 #include "geometry_msgs/AccelWithCovariance.hpp"
 
-static std::map<std::string, int64_t> g_hash_registry;
-
-static void init_hash_registry()
+static void init_hash_registry(Bridge &b)
 {
-    /* Register all known types */
-    g_hash_registry["std_msgs.Time"]       = std_msgs::Time::getHash();
-    g_hash_registry["std_msgs.Bool"]       = std_msgs::Bool::getHash();
-    g_hash_registry["std_msgs.Int32"]      = std_msgs::Int32::getHash();
-    g_hash_registry["std_msgs.Float32"]    = std_msgs::Float32::getHash();
-    g_hash_registry["std_msgs.Float64"]    = std_msgs::Float64::getHash();
-    g_hash_registry["std_msgs.ColorRGBA"]  = std_msgs::ColorRGBA::getHash();
+    /* Register all known types.
+     *
+     * NOTE: this list is kept in sync with three other places and there is
+     * a Python test (`test_arduino_msg_registry_sync`) that fails CI if any
+     * of them drift:
+     *   - dimos/core/arduino_module.py :: _KNOWN_TYPE_HEADERS
+     *   - dimos/hardware/arduino/common/arduino_msgs/**  (Arduino-side .h)
+     *   - this function (C++ bridge hash registry)
+     */
+    b.hash_registry["std_msgs.Time"]       = std_msgs::Time::getHash();
+    b.hash_registry["std_msgs.Bool"]       = std_msgs::Bool::getHash();
+    b.hash_registry["std_msgs.Int32"]      = std_msgs::Int32::getHash();
+    b.hash_registry["std_msgs.Float32"]    = std_msgs::Float32::getHash();
+    b.hash_registry["std_msgs.Float64"]    = std_msgs::Float64::getHash();
+    b.hash_registry["std_msgs.ColorRGBA"]  = std_msgs::ColorRGBA::getHash();
 
-    g_hash_registry["geometry_msgs.Vector3"]    = geometry_msgs::Vector3::getHash();
-    g_hash_registry["geometry_msgs.Point"]      = geometry_msgs::Point::getHash();
-    g_hash_registry["geometry_msgs.Point32"]    = geometry_msgs::Point32::getHash();
-    g_hash_registry["geometry_msgs.Quaternion"] = geometry_msgs::Quaternion::getHash();
-    g_hash_registry["geometry_msgs.Pose"]       = geometry_msgs::Pose::getHash();
-    g_hash_registry["geometry_msgs.Pose2D"]     = geometry_msgs::Pose2D::getHash();
-    g_hash_registry["geometry_msgs.Twist"]      = geometry_msgs::Twist::getHash();
-    g_hash_registry["geometry_msgs.Accel"]      = geometry_msgs::Accel::getHash();
-    g_hash_registry["geometry_msgs.Transform"]  = geometry_msgs::Transform::getHash();
-    g_hash_registry["geometry_msgs.Wrench"]     = geometry_msgs::Wrench::getHash();
-    g_hash_registry["geometry_msgs.Inertia"]    = geometry_msgs::Inertia::getHash();
-    g_hash_registry["geometry_msgs.PoseWithCovariance"]  = geometry_msgs::PoseWithCovariance::getHash();
-    g_hash_registry["geometry_msgs.TwistWithCovariance"] = geometry_msgs::TwistWithCovariance::getHash();
-    g_hash_registry["geometry_msgs.AccelWithCovariance"] = geometry_msgs::AccelWithCovariance::getHash();
+    b.hash_registry["geometry_msgs.Vector3"]    = geometry_msgs::Vector3::getHash();
+    b.hash_registry["geometry_msgs.Point"]      = geometry_msgs::Point::getHash();
+    b.hash_registry["geometry_msgs.Point32"]    = geometry_msgs::Point32::getHash();
+    b.hash_registry["geometry_msgs.Quaternion"] = geometry_msgs::Quaternion::getHash();
+    b.hash_registry["geometry_msgs.Pose"]       = geometry_msgs::Pose::getHash();
+    b.hash_registry["geometry_msgs.Pose2D"]     = geometry_msgs::Pose2D::getHash();
+    b.hash_registry["geometry_msgs.Twist"]      = geometry_msgs::Twist::getHash();
+    b.hash_registry["geometry_msgs.Accel"]      = geometry_msgs::Accel::getHash();
+    b.hash_registry["geometry_msgs.Transform"]  = geometry_msgs::Transform::getHash();
+    b.hash_registry["geometry_msgs.Wrench"]     = geometry_msgs::Wrench::getHash();
+    b.hash_registry["geometry_msgs.Inertia"]    = geometry_msgs::Inertia::getHash();
+    b.hash_registry["geometry_msgs.PoseWithCovariance"]  = geometry_msgs::PoseWithCovariance::getHash();
+    b.hash_registry["geometry_msgs.TwistWithCovariance"] = geometry_msgs::TwistWithCovariance::getHash();
+    b.hash_registry["geometry_msgs.AccelWithCovariance"] = geometry_msgs::AccelWithCovariance::getHash();
 }
 
 /* Extract "msg_type" from "topic_name#msg_type" */
@@ -209,16 +254,18 @@ static std::vector<uint8_t> hash_to_bytes(int64_t hash)
     return bytes;
 }
 
-static bool resolve_fingerprints()
+static bool resolve_fingerprints(Bridge &b)
 {
-    for (auto &tm : g_topics) {
-        std::string msg_type = extract_msg_type(tm.lcm_channel);
-        auto it = g_hash_registry.find(msg_type);
-        if (it == g_hash_registry.end()) {
-            fprintf(stderr, "[bridge] Unknown message type: %s\n", msg_type.c_str());
+    for (auto &tm : b.topics) {
+        std::string msg_type = extract_msg_type(tm->lcm_channel);
+        auto it = b.hash_registry.find(msg_type);
+        if (it == b.hash_registry.end()) {
+            fprintf(stderr,
+                    "[bridge] Unknown message type: %s (topic_id=%u, channel=%s)\n",
+                    msg_type.c_str(), tm->topic_id, tm->lcm_channel.c_str());
             return false;
         }
-        tm.fingerprint = hash_to_bytes(it->second);
+        tm->fingerprint = hash_to_bytes(it->second);
     }
     return true;
 }
@@ -254,8 +301,15 @@ static int serial_open(const std::string &port, int baud)
     tio.c_cflag &= ~CRTSCTS;
     tio.c_iflag &= ~(IXON | IXOFF | IXANY);
 
-    /* Set baud */
-    speed_t speed = baud_to_speed(baud);
+    /* Set baud — parse_args already validated this, so `ok` should always be
+     * true here.  Assert to be safe. */
+    bool speed_ok;
+    speed_t speed = baud_to_speed(baud, &speed_ok);
+    if (!speed_ok) {
+        fprintf(stderr, "[bridge] BUG: serial_open called with unsupported baud %d\n", baud);
+        close(fd);
+        return -1;
+    }
     cfsetispeed(&tio, speed);
     cfsetospeed(&tio, speed);
 
@@ -278,10 +332,7 @@ static void serial_close(int fd)
  * Serial → LCM (reader thread)
  * ====================================================================== */
 
-/* Build topic_id → TopicMapping lookup */
-static std::map<uint8_t, TopicMapping*> g_topic_out_map;
-
-static void serial_reader_thread()
+static void serial_reader_thread(Bridge &b)
 {
     enum { WAIT_START, READ_TOPIC, READ_LEN_LO, READ_LEN_HI, READ_PAYLOAD, READ_CRC } state = WAIT_START;
 
@@ -290,33 +341,38 @@ static void serial_reader_thread()
     uint16_t rx_pos = 0;
     uint8_t rx_buf[DSP_MAX_PAYLOAD];
 
-    while (g_running.load()) {
-        uint8_t b;
-        int n = read(g_serial_fd, &b, 1);
+    /* Exit on either global shutdown or a serial disconnect flagged by the
+     * writer path.  `serial_connected` being a separate atomic means that
+     * `signal_handler` flipping `running` to false and the writer flipping
+     * `serial_connected` to false don't race each other's meaning. */
+    while (b.running.load() && b.serial_connected.load()) {
+        uint8_t by;
+        int n = read(b.serial_fd, &by, 1);
         if (n < 0) {
             if (errno == EINTR) continue;
             fprintf(stderr, "[bridge] Serial read error: %s\n", strerror(errno));
+            b.serial_connected.store(false);
             break;
         }
-        if (n == 0) continue;  /* timeout, loop back */
+        if (n == 0) continue;  /* VTIME timeout, loop back */
 
         switch (state) {
         case WAIT_START:
-            if (b == DSP_START_BYTE) state = READ_TOPIC;
+            if (by == DSP_START_BYTE) state = READ_TOPIC;
             break;
 
         case READ_TOPIC:
-            rx_topic = b;
+            rx_topic = by;
             state = READ_LEN_LO;
             break;
 
         case READ_LEN_LO:
-            rx_len = b;
+            rx_len = by;
             state = READ_LEN_HI;
             break;
 
         case READ_LEN_HI:
-            rx_len |= ((uint16_t)b << 8);
+            rx_len |= ((uint16_t)by << 8);
             if (rx_len > DSP_MAX_PAYLOAD) {
                 state = WAIT_START;
                 break;
@@ -326,26 +382,24 @@ static void serial_reader_thread()
             break;
 
         case READ_PAYLOAD:
-            rx_buf[rx_pos++] = b;
+            rx_buf[rx_pos++] = by;
             if (rx_pos >= rx_len) state = READ_CRC;
             break;
 
         case READ_CRC: {
-            /* Verify CRC */
-            uint8_t check[3] = { rx_topic, (uint8_t)(rx_len & 0xFF), (uint8_t)((rx_len >> 8) & 0xFF) };
-            uint8_t crc = dsp_crc8(check, 3);
-            crc = dsp_crc8(rx_buf, rx_len);
-            /* Actually, CRC is over the concatenation. Recompute properly: */
-            uint8_t crc_buf[3 + DSP_MAX_PAYLOAD];
-            crc_buf[0] = rx_topic;
-            crc_buf[1] = (uint8_t)(rx_len & 0xFF);
-            crc_buf[2] = (uint8_t)((rx_len >> 8) & 0xFF);
-            memcpy(crc_buf + 3, rx_buf, rx_len);
-            uint8_t expected_crc = dsp_crc8(crc_buf, 3 + rx_len);
+            /* CRC-8/MAXIM over TOPIC + LEN_LO + LEN_HI + PAYLOAD, computed
+             * incrementally via the table.  No temporary buffer required. */
+            uint8_t expected_crc = 0x00;
+            expected_crc = _dsp_crc8_table[expected_crc ^ rx_topic];
+            expected_crc = _dsp_crc8_table[expected_crc ^ (uint8_t)(rx_len & 0xFF)];
+            expected_crc = _dsp_crc8_table[expected_crc ^ (uint8_t)((rx_len >> 8) & 0xFF)];
+            for (uint16_t k = 0; k < rx_len; k++) {
+                expected_crc = _dsp_crc8_table[expected_crc ^ rx_buf[k]];
+            }
 
-            if (expected_crc != b) {
-                fprintf(stderr, "[bridge] CRC mismatch on topic %d (got 0x%02X, expected 0x%02X)\n",
-                        rx_topic, b, expected_crc);
+            if (expected_crc != by) {
+                fprintf(stderr, "[bridge] CRC mismatch on topic %u (got 0x%02X, expected 0x%02X)\n",
+                        rx_topic, by, expected_crc);
                 state = WAIT_START;
                 break;
             }
@@ -357,17 +411,17 @@ static void serial_reader_thread()
                 fflush(stdout);
             } else {
                 /* Data: prepend fingerprint hash and publish to LCM */
-                auto it = g_topic_out_map.find(rx_topic);
-                if (it != g_topic_out_map.end()) {
+                auto it = b.topic_out_map.find(rx_topic);
+                if (it != b.topic_out_map.end()) {
                     TopicMapping *tm = it->second;
                     /* Build LCM message: 8-byte hash + payload */
                     int total = 8 + rx_len;
                     std::vector<uint8_t> lcm_buf(total);
                     memcpy(lcm_buf.data(), tm->fingerprint.data(), 8);
                     memcpy(lcm_buf.data() + 8, rx_buf, rx_len);
-                    g_lcm->publish(tm->lcm_channel, lcm_buf.data(), total);
+                    b.lcm->publish(tm->lcm_channel, lcm_buf.data(), total);
                 } else {
-                    fprintf(stderr, "[bridge] Unknown outbound topic: %d\n", rx_topic);
+                    fprintf(stderr, "[bridge] Unknown outbound topic: %u\n", rx_topic);
                 }
             }
             state = WAIT_START;
@@ -381,62 +435,109 @@ static void serial_reader_thread()
  * LCM → Serial (subscription handler)
  * ====================================================================== */
 
-/* Build LCM channel → TopicMapping lookup */
-static std::map<std::string, TopicMapping*> g_topic_in_map;
+/* write_all — loop until `len` bytes are written or a hard error occurs.
+ *
+ * On EINTR we retry; on any other error we return false so the caller can
+ * flag the serial link down and let the reconnect loop run.  A partial
+ * write on a dying USB device would otherwise corrupt the DSP frame. */
+static bool write_all(int fd, const void *buf, size_t len)
+{
+    const uint8_t *p = static_cast<const uint8_t *>(buf);
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t n = ::write(fd, p, remaining);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return false;  /* shouldn't happen on a blocking fd */
+        p += (size_t)n;
+        remaining -= (size_t)n;
+    }
+    return true;
+}
 
 /* Forward declaration */
-static void send_lcm_to_serial(const lcm::ReceiveBuffer *rbuf, TopicMapping *tm);
+static void send_lcm_to_serial(Bridge &b,
+                               const lcm::ReceiveBuffer *rbuf,
+                               TopicMapping *tm);
 
 class RawHandler {
 public:
+    Bridge *bridge;
     TopicMapping *tm;
-    RawHandler(TopicMapping *t) : tm(t) {}
+    RawHandler(Bridge *br, TopicMapping *t) : bridge(br), tm(t) {}
     void handle(const lcm::ReceiveBuffer *rbuf, const std::string & /*channel*/) {
-        send_lcm_to_serial(rbuf, tm);
+        send_lcm_to_serial(*bridge, rbuf, tm);
     }
 };
 
-static std::vector<std::unique_ptr<RawHandler>> g_raw_handlers;
-
-static void send_lcm_to_serial(const lcm::ReceiveBuffer *rbuf,
+static void send_lcm_to_serial(Bridge &b,
+                               const lcm::ReceiveBuffer *rbuf,
                                TopicMapping *tm)
 {
-
     /* Strip 8-byte fingerprint hash from LCM data */
-    if (rbuf->data_size < 8) return;
+    size_t data_size = (size_t)rbuf->data_size;
+    if (data_size < 8) {
+        fprintf(stderr,
+                "[bridge] Dropping LCM message on %s: size %zu < 8 (no fingerprint)\n",
+                tm->lcm_channel.c_str(), data_size);
+        return;
+    }
     const uint8_t *payload = (const uint8_t *)rbuf->data + 8;
-    uint16_t payload_len = (uint16_t)(rbuf->data_size - 8);
+    size_t payload_len_raw = data_size - 8;
 
-    if (payload_len > DSP_MAX_PAYLOAD) return;
+    if (payload_len_raw > DSP_MAX_PAYLOAD) {
+        fprintf(stderr,
+                "[bridge] Dropping LCM message on %s: payload %zu > DSP_MAX_PAYLOAD %d\n",
+                tm->lcm_channel.c_str(), payload_len_raw, DSP_MAX_PAYLOAD);
+        return;
+    }
+    uint16_t payload_len = (uint16_t)payload_len_raw;
 
-    /* Build DSP frame */
+    /* Build DSP frame header */
     uint8_t header[DSP_HEADER_SIZE];
     header[0] = DSP_START_BYTE;
     header[1] = tm->topic_id;
     header[2] = (uint8_t)(payload_len & 0xFF);
     header[3] = (uint8_t)((payload_len >> 8) & 0xFF);
 
-    /* CRC over topic + length + payload */
-    uint8_t crc_buf[3 + DSP_MAX_PAYLOAD];
-    crc_buf[0] = tm->topic_id;
-    crc_buf[1] = header[2];
-    crc_buf[2] = header[3];
-    memcpy(crc_buf + 3, payload, payload_len);
-    uint8_t crc = dsp_crc8(crc_buf, 3 + payload_len);
-
-    /* Write to serial (thread-safe) */
-    std::lock_guard<std::mutex> lock(g_serial_write_mutex);
-    write(g_serial_fd, header, DSP_HEADER_SIZE);
-    if (payload_len > 0) {
-        write(g_serial_fd, payload, payload_len);
+    /* CRC-8/MAXIM over TOPIC + LEN_LO + LEN_HI + PAYLOAD, incremental. */
+    uint8_t crc = 0x00;
+    crc = _dsp_crc8_table[crc ^ header[1]];
+    crc = _dsp_crc8_table[crc ^ header[2]];
+    crc = _dsp_crc8_table[crc ^ header[3]];
+    for (uint16_t k = 0; k < payload_len; k++) {
+        crc = _dsp_crc8_table[crc ^ payload[k]];
     }
-    write(g_serial_fd, &crc, 1);
+
+    /* Write to serial (thread-safe w.r.t. other writers).
+     *
+     * If any write fails (USB disconnect, short write on a dead fd, etc.)
+     * we flag `serial_connected` false so the reader thread bails and the
+     * reconnect loop takes over.  Dropping a partial frame is strictly
+     * better than continuing to corrupt the outbound stream. */
+    std::lock_guard<std::mutex> lock(b.serial_write_mutex);
+    if (!b.serial_connected.load()) return;
+    bool ok = write_all(b.serial_fd, header, DSP_HEADER_SIZE);
+    if (ok && payload_len > 0) {
+        ok = write_all(b.serial_fd, payload, payload_len);
+    }
+    if (ok) {
+        ok = write_all(b.serial_fd, &crc, 1);
+    }
+    if (!ok) {
+        fprintf(stderr,
+                "[bridge] Serial write failed on topic %u (%s): %s — flagging disconnect\n",
+                tm->topic_id, tm->lcm_channel.c_str(), strerror(errno));
+        b.serial_connected.store(false);
+    }
 }
 
-static void lcm_handler_thread()
+static void lcm_handler_thread(Bridge &b)
 {
-    while (g_running.load()) {
-        int ret = g_lcm->handleTimeout(100);  /* 100ms timeout */
+    while (b.running.load() && b.serial_connected.load()) {
+        int ret = b.lcm->handleTimeout(100);  /* 100ms timeout */
         if (ret < 0) {
             fprintf(stderr, "[bridge] LCM handle error\n");
             break;
@@ -450,7 +551,19 @@ static void lcm_handler_thread()
 
 static void signal_handler(int /*sig*/)
 {
-    g_running.store(false);
+    if (g_bridge) g_bridge->running.store(false);
+}
+
+/* Sleep for at most `seconds`, waking early if `running` is cleared. */
+static void interruptible_sleep(Bridge &b, float seconds)
+{
+    const int step_ms = 50;
+    const int total_ms = (int)(seconds * 1000.0f);
+    int elapsed = 0;
+    while (elapsed < total_ms && b.running.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(step_ms));
+        elapsed += step_ms;
+    }
 }
 
 /* ======================================================================
@@ -459,26 +572,30 @@ static void signal_handler(int /*sig*/)
 
 int main(int argc, char **argv)
 {
-    parse_args(argc, argv);
+    Bridge bridge;
+    g_bridge = &bridge;
 
-    if (g_serial_port.empty()) {
+    parse_args(bridge, argc, argv);
+
+    if (bridge.serial_port.empty()) {
         fprintf(stderr, "Usage: arduino_bridge --serial_port <port> --baudrate <baud> "
                         "[--topic_out <id> <channel>] [--topic_in <id> <channel>] ...\n");
         return 1;
     }
 
     /* Compute fingerprint hashes */
-    init_hash_registry();
-    if (!resolve_fingerprints()) {
+    init_hash_registry(bridge);
+    if (!resolve_fingerprints(bridge)) {
         return 1;
     }
 
-    /* Build lookup maps */
-    for (auto &tm : g_topics) {
-        if (tm.is_output) {
-            g_topic_out_map[tm.topic_id] = &tm;
+    /* Build lookup maps — use the unique_ptr-owned storage so raw pointers
+     * into the vector remain valid. */
+    for (auto &tm : bridge.topics) {
+        if (tm->is_output) {
+            bridge.topic_out_map[tm->topic_id] = tm.get();
         } else {
-            g_topic_in_map[tm.lcm_channel] = &tm;
+            bridge.topic_in_map[tm->lcm_channel] = tm.get();
         }
     }
 
@@ -492,58 +609,58 @@ int main(int argc, char **argv)
         fprintf(stderr, "[bridge] LCM init failed\n");
         return 1;
     }
-    g_lcm = &lcm;
+    bridge.lcm = &lcm;
 
     /* Subscribe to inbound LCM topics */
-    for (auto &tm : g_topics) {
-        if (!tm.is_output) {
-            auto handler = std::make_unique<RawHandler>(&tm);
-            lcm.subscribe(tm.lcm_channel, &RawHandler::handle, handler.get());
-            g_raw_handlers.push_back(std::move(handler));
-            printf("[bridge] Subscribed LCM→Serial: topic %d ← %s\n",
-                   tm.topic_id, tm.lcm_channel.c_str());
+    for (auto &tm : bridge.topics) {
+        if (!tm->is_output) {
+            auto handler = std::make_unique<RawHandler>(&bridge, tm.get());
+            lcm.subscribe(tm->lcm_channel, &RawHandler::handle, handler.get());
+            bridge.raw_handlers.push_back(std::move(handler));
+            printf("[bridge] Subscribed LCM→Serial: topic %u ← %s\n",
+                   tm->topic_id, tm->lcm_channel.c_str());
         } else {
-            printf("[bridge] Serial→LCM: topic %d → %s\n",
-                   tm.topic_id, tm.lcm_channel.c_str());
+            printf("[bridge] Serial→LCM: topic %u → %s\n",
+                   tm->topic_id, tm->lcm_channel.c_str());
         }
     }
 
     /* Open serial port */
-    printf("[bridge] Opening %s at %d baud\n", g_serial_port.c_str(), g_baudrate);
+    printf("[bridge] Opening %s at %d baud\n", bridge.serial_port.c_str(), bridge.baudrate);
 
-    while (g_running.load()) {
-        g_serial_fd = serial_open(g_serial_port, g_baudrate);
-        if (g_serial_fd < 0) {
-            if (!g_reconnect) return 1;
-            fprintf(stderr, "[bridge] Retrying in %.1fs...\n", g_reconnect_interval);
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds((int)(g_reconnect_interval * 1000)));
+    while (bridge.running.load()) {
+        bridge.serial_fd = serial_open(bridge.serial_port, bridge.baudrate);
+        if (bridge.serial_fd < 0) {
+            if (!bridge.reconnect) return 1;
+            fprintf(stderr, "[bridge] Retrying in %.1fs...\n", bridge.reconnect_interval);
+            interruptible_sleep(bridge, bridge.reconnect_interval);
             continue;
         }
 
-        printf("[bridge] Serial port opened (fd=%d)\n", g_serial_fd);
+        printf("[bridge] Serial port opened (fd=%d)\n", bridge.serial_fd);
+        bridge.serial_connected.store(true);
 
         /* Start threads */
-        std::thread reader(serial_reader_thread);
-        std::thread lcm_thread(lcm_handler_thread);
+        std::thread reader([&bridge] { serial_reader_thread(bridge); });
+        std::thread lcm_thread([&bridge] { lcm_handler_thread(bridge); });
 
         /* Wait for reader to exit (serial disconnect or shutdown) */
         reader.join();
 
-        /* Stop LCM thread */
-        g_running.store(false);
+        /* Reader bailed — ensure connectivity flag is false and join LCM. */
+        bridge.serial_connected.store(false);
         lcm_thread.join();
 
-        serial_close(g_serial_fd);
-        g_serial_fd = -1;
+        serial_close(bridge.serial_fd);
+        bridge.serial_fd = -1;
 
-        if (!g_reconnect || !g_running.load()) break;
+        if (!bridge.reconnect || !bridge.running.load()) break;
 
-        /* Reconnect */
-        printf("[bridge] Disconnected, reconnecting in %.1fs...\n", g_reconnect_interval);
-        g_running.store(true);
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds((int)(g_reconnect_interval * 1000)));
+        /* Reconnect.  DO NOT touch `running` here — only the signal handler
+         * clears it, and we don't want to overwrite a ^C that arrives during
+         * the backoff sleep. */
+        printf("[bridge] Disconnected, reconnecting in %.1fs...\n", bridge.reconnect_interval);
+        interruptible_sleep(bridge, bridge.reconnect_interval);
     }
 
     printf("[bridge] Shutting down\n");

@@ -123,9 +123,15 @@ static inline uint8_t dsp_crc8(const uint8_t *data, uint16_t len)
  * and adds buffering/latency on real hardware.  Direct register access
  * is faster, smaller, and works in any AVR simulator.
  *
- * Currently supports USART0 on ATmega328P/2560/etc.  Other AVRs would
- * need conditional register names.
+ * Currently supports USART0 on ATmega328P/2560/etc.  Other AVRs (e.g.
+ * the 32U4 in the Leonardo — USB-CDC, not a USART) would get silent
+ * runtime failure, so we hard-error at compile time instead.
  * ====================================================================== */
+
+#if !defined(__AVR_ATmega328P__) && !defined(__AVR_ATmega328PB__) && \
+    !defined(__AVR_ATmega2560__) && !defined(__AVR_ATmega1280__)
+#error "dsp_protocol.h currently only supports ATmega328P / 328PB / 1280 / 2560 USART0. Add your chip's UBRRn/UCSRnA/etc. here or select a supported board."
+#endif
 
 #include <Arduino.h>
 #include <avr/io.h>
@@ -156,11 +162,20 @@ static inline uint8_t _dsp_usart_read(void) {
     return UDR0;
 }
 
-/* --- Internal state --- */
-static uint8_t _dsp_rx_buf[DSP_MAX_PAYLOAD];
-static bool    _dsp_msg_ready = false;
+/* --- Internal state ---
+ *
+ * The parser state must be shared across all translation units that
+ * include this header, otherwise a sketch split across multiple .cpp /
+ * .ino files ends up with one independent state machine per TU — the
+ * second TU's `dimos_check_message()` would see an empty buffer.
+ *
+ * We put the state in a struct and expose it via a plain (non-static)
+ * `inline` function whose function-local static is guaranteed by the C++
+ * standard to resolve to a single object across TUs.  Users who
+ * `#include` this header twice in the same TU are still fine because
+ * `static inline` functions elsewhere (dimos_send, dimos_check_message)
+ * all funnel through this one accessor. */
 
-/* Parser states */
 enum _dsp_parse_state {
     DSP_WAIT_START,
     DSP_READ_TOPIC,
@@ -170,10 +185,30 @@ enum _dsp_parse_state {
     DSP_READ_CRC
 };
 
-static enum _dsp_parse_state _dsp_state = DSP_WAIT_START;
-static uint8_t  _dsp_rx_topic;
-static uint16_t _dsp_rx_len;
-static uint16_t _dsp_rx_payload_pos;
+struct _dsp_state_t {
+    uint8_t  rx_buf[DSP_MAX_PAYLOAD];
+    bool     msg_ready;
+    enum _dsp_parse_state state;
+    uint8_t  rx_topic;
+    uint16_t rx_len;
+    uint16_t rx_payload_pos;
+};
+
+/* NOT `static inline` — we want external linkage so the linker
+ * collapses this to a single definition, and with it a single
+ * function-local static. */
+inline _dsp_state_t &_dsp_state_ref(void)
+{
+    static _dsp_state_t s = {
+        /* rx_buf         */ {0},
+        /* msg_ready      */ false,
+        /* state          */ DSP_WAIT_START,
+        /* rx_topic       */ 0,
+        /* rx_len         */ 0,
+        /* rx_payload_pos */ 0,
+    };
+    return s;
+}
 
 /**
  * Initialize DimOS serial protocol.
@@ -182,8 +217,9 @@ static uint16_t _dsp_rx_payload_pos;
 static inline void dimos_init(uint32_t baud)
 {
     _dsp_usart_init(baud);
-    _dsp_state = DSP_WAIT_START;
-    _dsp_msg_ready = false;
+    _dsp_state_t &s = _dsp_state_ref();
+    s.state = DSP_WAIT_START;
+    s.msg_ready = false;
 }
 
 /**
@@ -240,72 +276,83 @@ static inline void dimos_send(enum dimos_topic topic, const uint8_t *data, uint1
  *       }
  *   }
  */
+/* Maximum bytes `dimos_check_message` will process in one call.  Prevents
+ * a flood of 1-byte frames from starving the user's loop().  Override by
+ * defining DSP_CHECK_MAX_BYTES before including this header. */
+#ifndef DSP_CHECK_MAX_BYTES
+#define DSP_CHECK_MAX_BYTES 256
+#endif
+
 static inline bool dimos_check_message(void)
 {
+    _dsp_state_t &s = _dsp_state_ref();
+
     /* If a previous message is still unconsumed, clear it */
-    _dsp_msg_ready = false;
+    s.msg_ready = false;
 
-    while (_dsp_usart_available()) {
+    uint16_t bytes_processed = 0;
+    while (_dsp_usart_available() && bytes_processed < DSP_CHECK_MAX_BYTES) {
         uint8_t b = _dsp_usart_read();
+        bytes_processed++;
 
-        switch (_dsp_state) {
+        switch (s.state) {
         case DSP_WAIT_START:
             if (b == DSP_START_BYTE) {
-                _dsp_state = DSP_READ_TOPIC;
+                s.state = DSP_READ_TOPIC;
             }
             break;
 
         case DSP_READ_TOPIC:
-            _dsp_rx_topic = b;
-            _dsp_state = DSP_READ_LEN_LO;
+            s.rx_topic = b;
+            s.state = DSP_READ_LEN_LO;
             break;
 
         case DSP_READ_LEN_LO:
-            _dsp_rx_len = b;
-            _dsp_state = DSP_READ_LEN_HI;
+            s.rx_len = b;
+            s.state = DSP_READ_LEN_HI;
             break;
 
         case DSP_READ_LEN_HI:
-            _dsp_rx_len |= ((uint16_t)b << 8);
-            if (_dsp_rx_len > DSP_MAX_PAYLOAD) {
-                _dsp_state = DSP_WAIT_START;
+            s.rx_len |= ((uint16_t)b << 8);
+            if (s.rx_len > DSP_MAX_PAYLOAD) {
+                s.state = DSP_WAIT_START;
                 break;
             }
-            _dsp_rx_payload_pos = 0;
-            if (_dsp_rx_len == 0) {
-                _dsp_state = DSP_READ_CRC;
+            s.rx_payload_pos = 0;
+            if (s.rx_len == 0) {
+                s.state = DSP_READ_CRC;
             } else {
-                _dsp_state = DSP_READ_PAYLOAD;
+                s.state = DSP_READ_PAYLOAD;
             }
             break;
 
         case DSP_READ_PAYLOAD:
-            _dsp_rx_buf[_dsp_rx_payload_pos++] = b;
-            if (_dsp_rx_payload_pos >= _dsp_rx_len) {
-                _dsp_state = DSP_READ_CRC;
+            s.rx_buf[s.rx_payload_pos++] = b;
+            if (s.rx_payload_pos >= s.rx_len) {
+                s.state = DSP_READ_CRC;
             }
             break;
 
         case DSP_READ_CRC: {
             /* Verify CRC over topic + length + payload */
             uint8_t crc_input[3];
-            crc_input[0] = _dsp_rx_topic;
-            crc_input[1] = (uint8_t)(_dsp_rx_len & 0xFF);
-            crc_input[2] = (uint8_t)((_dsp_rx_len >> 8) & 0xFF);
+            crc_input[0] = s.rx_topic;
+            crc_input[1] = (uint8_t)(s.rx_len & 0xFF);
+            crc_input[2] = (uint8_t)((s.rx_len >> 8) & 0xFF);
 
             uint8_t crc = dsp_crc8(crc_input, 3);
-            if (_dsp_rx_len > 0) {
+            if (s.rx_len > 0) {
                 /* Continue CRC over payload */
                 uint16_t k;
-                for (k = 0; k < _dsp_rx_len; k++) {
-                    crc = DSP_CRC_READ(&_dsp_crc8_table[crc ^ _dsp_rx_buf[k]]);
+                for (k = 0; k < s.rx_len; k++) {
+                    crc = DSP_CRC_READ(&_dsp_crc8_table[crc ^ s.rx_buf[k]]);
                 }
             }
 
-            _dsp_state = DSP_WAIT_START;
+            s.state = DSP_WAIT_START;
 
             if (crc == b) {
-                _dsp_msg_ready = true;
+                s.msg_ready = true;
                 return true;  /* message ready — caller reads it */
             }
             /* CRC mismatch — discard, keep parsing */
@@ -314,7 +361,7 @@ static inline bool dimos_check_message(void)
         }
     }
 
-    return false;  /* no complete message available */
+    return false;  /* no complete message available (yet) */
 }
 
 /**
@@ -323,7 +370,7 @@ static inline bool dimos_check_message(void)
  */
 static inline enum dimos_topic dimos_message_topic(void)
 {
-    return (enum dimos_topic)_dsp_rx_topic;
+    return (enum dimos_topic)_dsp_state_ref().rx_topic;
 }
 
 /**
@@ -332,7 +379,7 @@ static inline enum dimos_topic dimos_message_topic(void)
  */
 static inline const uint8_t *dimos_message_data(void)
 {
-    return _dsp_rx_buf;
+    return _dsp_state_ref().rx_buf;
 }
 
 /**
@@ -341,7 +388,7 @@ static inline const uint8_t *dimos_message_data(void)
  */
 static inline uint16_t dimos_message_len(void)
 {
-    return _dsp_rx_len;
+    return _dsp_state_ref().rx_len;
 }
 
 /* ======================================================================
@@ -386,14 +433,22 @@ private:
 static DimosSerial_ DimosSerial;
 
 /*
- * Redirect Serial → DimosSerial so user's Serial.print/println
- * goes through the DSP debug channel instead of raw serial.
+ * IMPORTANT: use `DimosSerial.print/println(...)` in your sketch, not
+ * `Serial.print/println(...)`.
  *
- * To access the raw HardwareSerial, use Serial0 (on most boards)
- * or cast: ((HardwareSerial&)Serial0).
+ * Earlier versions of this header installed `#define Serial DimosSerial`
+ * so that existing `Serial.print` calls would transparently route through
+ * the DSP debug channel.  That was removed because macro-replacing
+ * `Serial` breaks any third-party library (Wire, SPI, motor drivers,
+ * etc.) that references `Serial` internally — those libraries would try
+ * to call `DimosSerial.available()` / `.read()` which don't exist, and
+ * fail to compile deep inside the library header.
+ *
+ * If you want a shim in your own sketch, add this AFTER all library
+ * includes:
+ *
+ *     #define Serial DimosSerial
  */
-#undef Serial
-#define Serial DimosSerial
 
 #endif /* ARDUINO */
 

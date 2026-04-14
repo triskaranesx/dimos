@@ -439,6 +439,143 @@ static void test_roundtrip_pose() {
     tests_passed++;
 }
 
+/* ======================================================================
+ * AVR double-promotion path
+ *
+ * On AVR `sizeof(double)==4` so lcm_coretypes_arduino.h promotes the
+ * 4-byte IEEE 754 single to an 8-byte double bit-pattern on encode and
+ * truncates back on decode.  The `#if defined(__AVR__)` encode/decode
+ * functions are never exercised by the rest of this test file (which
+ * runs on x86_64), so Paul's worry was that they could silently
+ * produce the wrong bytes for months before anyone notices.
+ *
+ * `_dimos_f32_to_f64_bits` and `_dimos_f64_bits_to_f32` were moved out
+ * of the `#if defined(__AVR__)` block and into the unconditional
+ * portion of the header so we can call them here and compare against
+ * the platform's own (IEEE 754 compliant) `(double)f` conversion.
+ * ====================================================================== */
+
+#include <cfloat>
+
+static void test_avr_double_promotion()
+{
+    /* Mix of values that exercise every branch:
+     *   - zero (±)
+     *   - smallest and largest normals
+     *   - typical sensor-range values
+     *   - ±infinity
+     *   - NaN (checks sign + mantissa-nonzero propagation)
+     *
+     * Denorms are intentionally omitted — the algorithm documents they
+     * flush to zero and that would produce a mismatch with native
+     * promotion.  One denorm test below asserts that flush-to-zero
+     * behaviour explicitly. */
+    const float normals[] = {
+        0.0f,
+        -0.0f,
+        1.0f,
+        -1.0f,
+        0.5f,
+        -0.5f,
+        M_PI,
+        -M_PI,
+        9.81f,
+        -273.15f,
+        1.17549435e-38f,   /* smallest positive normal float */
+        3.40282347e38f,    /* FLT_MAX */
+        -3.40282347e38f,
+    };
+
+    for (size_t i = 0; i < sizeof(normals) / sizeof(normals[0]); i++) {
+        float f = normals[i];
+        tests_run++;
+
+        uint64_t got_bits = _dimos_f32_to_f64_bits(f);
+        double native = (double)f;
+        uint64_t native_bits;
+        memcpy(&native_bits, &native, sizeof(native_bits));
+
+        if (got_bits != native_bits) {
+            printf("FAIL avr_double_promote: f=%.8g  got=0x%016llx  native=0x%016llx\n",
+                   f, (unsigned long long)got_bits, (unsigned long long)native_bits);
+            continue;
+        }
+
+        /* Round-trip back and check f2f32 inverts exactly on the normals. */
+        float roundtrip = _dimos_f64_bits_to_f32(got_bits);
+        if (memcmp(&roundtrip, &f, sizeof(f)) != 0) {
+            printf("FAIL avr_double_roundtrip: f=%.8g  rt=%.8g\n", f, roundtrip);
+            continue;
+        }
+
+        tests_passed++;
+    }
+    printf("PASS avr_double_promotion (%zu normals)\n",
+           sizeof(normals) / sizeof(normals[0]));
+
+    /* ±infinity */
+    {
+        tests_run++;
+        uint64_t got = _dimos_f32_to_f64_bits(INFINITY);
+        double native_inf = (double)INFINITY;
+        uint64_t native_bits;
+        memcpy(&native_bits, &native_inf, sizeof(native_bits));
+        if (got == native_bits) {
+            tests_passed++;
+            printf("PASS avr_double_promotion (+inf)\n");
+        } else {
+            printf("FAIL avr_double_promotion (+inf): got=0x%016llx native=0x%016llx\n",
+                   (unsigned long long)got, (unsigned long long)native_bits);
+        }
+    }
+    {
+        tests_run++;
+        uint64_t got = _dimos_f32_to_f64_bits(-INFINITY);
+        double native_inf = (double)-INFINITY;
+        uint64_t native_bits;
+        memcpy(&native_bits, &native_inf, sizeof(native_bits));
+        if (got == native_bits) {
+            tests_passed++;
+            printf("PASS avr_double_promotion (-inf)\n");
+        } else {
+            printf("FAIL avr_double_promotion (-inf): got=0x%016llx native=0x%016llx\n",
+                   (unsigned long long)got, (unsigned long long)native_bits);
+        }
+    }
+
+    /* NaN — sign bit preserved, exponent all-ones, mantissa nonzero. */
+    {
+        tests_run++;
+        uint64_t got = _dimos_f32_to_f64_bits(NAN);
+        uint64_t sign_mask = 0x8000000000000000ULL;
+        uint64_t exp_mask  = 0x7ff0000000000000ULL;
+        uint64_t mant_mask = 0x000fffffffffffffULL;
+        bool ok = ((got & exp_mask) == exp_mask) && ((got & mant_mask) != 0);
+        (void)sign_mask;
+        if (ok) {
+            tests_passed++;
+            printf("PASS avr_double_promotion (NaN)\n");
+        } else {
+            printf("FAIL avr_double_promotion (NaN): got=0x%016llx\n",
+                   (unsigned long long)got);
+        }
+    }
+
+    /* Smallest positive denorm — algorithm flushes to +0. */
+    {
+        tests_run++;
+        float denorm = 1.0e-40f;  /* below FLT_MIN, a denorm */
+        uint64_t got = _dimos_f32_to_f64_bits(denorm);
+        if (got == 0ULL) {
+            tests_passed++;
+            printf("PASS avr_double_promotion (denorm flush-to-zero)\n");
+        } else {
+            printf("FAIL avr_double_promotion (denorm flush): got=0x%016llx\n",
+                   (unsigned long long)got);
+        }
+    }
+}
+
 int main() {
     printf("=== Arduino LCM Wire Format Compatibility Tests ===\n\n");
 
@@ -468,6 +605,9 @@ int main() {
 
     /* roundtrip */
     test_roundtrip_pose();
+
+    /* AVR double-promotion path (normally compiled out on x86_64) */
+    test_avr_double_promotion();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

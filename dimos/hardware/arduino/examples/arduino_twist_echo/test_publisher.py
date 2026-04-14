@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import threading
-import time
 
 from dimos.core.core import rpc
 from dimos.core.module import Module, ModuleConfig
@@ -43,13 +42,13 @@ class TestPublisher(Module):
     echo_in: In[Twist]
 
     _thread: threading.Thread | None = None
-    _stopping: bool = False
+    _stop_event: threading.Event | None = None
     _counter: int = 0
 
     @rpc
     def start(self) -> None:
         super().start()
-        self._stopping = False
+        self._stop_event = threading.Event()
         self.echo_in.subscribe(self._on_echo)
         self._thread = threading.Thread(target=self._publish_loop, daemon=True)
         self._thread.start()
@@ -57,13 +56,22 @@ class TestPublisher(Module):
 
     @rpc
     def stop(self) -> None:
-        self._stopping = True
+        # Signal the loop via Event so it wakes from the period sleep
+        # immediately instead of waiting up to `publish_period_s`.
+        if self._stop_event is not None:
+            self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=2)
+            # Give the loop one full period plus a small grace window to
+            # exit cleanly.
+            join_timeout = max(2.0, self.config.publish_period_s + 0.5)
+            self._thread.join(timeout=join_timeout)
+            if self._thread.is_alive():
+                logger.warning("TestPublisher thread did not exit in time")
         super().stop()
 
     def _publish_loop(self) -> None:
-        while not self._stopping:
+        assert self._stop_event is not None
+        while not self._stop_event.is_set():
             self._counter += 1
             twist = Twist(
                 linear=Vector3(self._counter * 0.1, 0.0, 0.0),
@@ -76,7 +84,10 @@ class TestPublisher(Module):
                 linear_x=twist.linear.x,
                 angular_z=twist.angular.z,
             )
-            time.sleep(self.config.publish_period_s)
+            # `Event.wait(timeout=...)` returns True when the event is set,
+            # so stop() wakes the loop immediately instead of waiting for
+            # the full period.
+            self._stop_event.wait(timeout=self.config.publish_period_s)
 
     def _on_echo(self, msg: Twist) -> None:
         logger.info(

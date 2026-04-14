@@ -31,10 +31,10 @@ from dimos.hardware.arduino.examples.arduino_twist_echo.test_publisher import (
 
 # Two modules wired by autoconnect via stream name+type matching:
 #   TestPublisher.cmd_out      (Out[Twist])  ──┐
-#   TwistEcho.example_input_topic1 (In[Twist])◀┘  via remapping
+#   TwistEcho.twist_in         (In[Twist])  ◀──┘  via remapping
 #
-#   TwistEcho.example_output_topic2 (Out[Twist])  ──┐
-#   TestPublisher.echo_in           (In[Twist])  ◀──┘  via remapping
+#   TwistEcho.twist_echo_out   (Out[Twist])  ──┐
+#   TestPublisher.echo_in      (In[Twist])   ◀─┘  via remapping
 arduino_twist_echo_virtual = (
     autoconnect(
         TestPublisher.blueprint(publish_period_s=0.5),
@@ -42,11 +42,11 @@ arduino_twist_echo_virtual = (
     )
     .remappings(
         [
-            # Connect TestPublisher.cmd_out → TwistEcho.example_input_topic1
+            # TestPublisher.cmd_out → TwistEcho.twist_in
             (TestPublisher, "cmd_out", "twist_command"),
-            (TwistEcho, "example_input_topic1", "twist_command"),
-            # Connect TwistEcho.example_output_topic2 → TestPublisher.echo_in
-            (TwistEcho, "example_output_topic2", "twist_echo"),
+            (TwistEcho, "twist_in", "twist_command"),
+            # TwistEcho.twist_echo_out → TestPublisher.echo_in
+            (TwistEcho, "twist_echo_out", "twist_echo"),
             (TestPublisher, "echo_in", "twist_echo"),
         ]
     )
