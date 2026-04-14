@@ -136,7 +136,7 @@ ENABLE_SKIP_CLOCK_SYNC = False
 # event loop + daemon thread. Most modules never use asyncio during replay.
 # When enabled, loops are created lazily on first access.
 # Controlled via env var DIMOS_LAZY_ASYNCIO=1 → checked in module.py.
-ENABLE_LAZY_ASYNCIO = False
+ENABLE_LAZY_ASYNCIO = True
 
 
 # ------------------------------------------------------------------
