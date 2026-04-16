@@ -8,6 +8,7 @@ use lcm_msgs::geometry_msgs::{Twist, Vector3};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct PongConfig {
     sample_config: i64,
 }

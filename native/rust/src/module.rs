@@ -62,6 +62,36 @@ impl<T> Output<T> {
     }
 }
 
+/// Parse a JSON config line as written by the Python NativeModule coordinator.
+/// Returns `(topics, config)`. Extracted so it can be unit-tested without stdin.
+fn parse_config_json<C: DeserializeOwned>(line: &str) -> io::Result<(HashMap<String, String>, C)> {
+    let json: serde_json::Value = serde_json::from_str(line.trim())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    let mut topics = HashMap::new();
+    if let Some(t) = json.get("topics").and_then(|v| v.as_object()) {
+        for (port, topic) in t {
+            if let Some(s) = topic.as_str() {
+                topics.insert(port.clone(), s.to_string());
+            }
+        }
+    }
+
+    let config: C = match json.get("config") {
+        None => return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "missing 'config' field in stdin JSON — coordinator must always send a config object",
+        )),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to deserialize config: {e}"),
+            ))?,
+    };
+
+    Ok((topics, config))
+}
+
 /// High-level wrapper around a transport for use in dimos native modules.
 ///
 /// Generic over any `T: Transport`. Use `LcmTransport` for the standard LCM
@@ -129,27 +159,14 @@ impl<T: Transport> NativeModule<T> {
     /// ```
     ///
     /// `C` is the module-specific config type. Use `()` if there is no extra configs to pass.
-    pub async fn from_stdin<C: DeserializeOwned + Default + std::fmt::Debug>(transport: T) -> io::Result<(Self, C)> {
-        let mut module = Self::new(transport);
-
+    pub async fn from_stdin<C: DeserializeOwned + std::fmt::Debug>(transport: T) -> io::Result<(Self, C)> {
         let mut line = String::new();
         io::stdin().lock().read_line(&mut line)?;
 
-        let json: serde_json::Value = serde_json::from_str(line.trim())
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let (topics, config) = parse_config_json::<C>(&line)?;
 
-        if let Some(topics) = json.get("topics").and_then(|v| v.as_object()) {
-            for (port, topic) in topics {
-                if let Some(s) = topic.as_str() {
-                    module.topics.insert(port.clone(), s.to_string());
-                }
-            }
-        }
-
-        let config: C = json
-            .get("config")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let mut module = Self::new(transport);
+        module.topics = topics;
 
         let exe = std::env::current_exe()
             .ok()
@@ -238,5 +255,135 @@ pub struct NativeModuleHandle(tokio::task::JoinHandle<()>);
 impl NativeModuleHandle {
     pub async fn join(self) -> Result<(), tokio::task::JoinError> {
         self.0.await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    struct MockTransport;
+
+    impl crate::transport::Transport for MockTransport {
+        async fn publish(&self, _channel: &str, _data: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        async fn recv(&mut self) -> io::Result<(String, Vec<u8>)> {
+            std::future::pending().await
+        }
+    }
+
+    #[derive(Debug, Deserialize, Default, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct TestConfig {
+        value: i64,
+        name: String,
+    }
+
+    // --- parse_config_json ---
+
+    #[test]
+    fn parses_topics_and_config() {
+        let json = r#"{"topics": {"data": "/foo/data", "confirm": "/foo/confirm"}, "config": {"value": 42, "name": "hello"}}"#;
+        let (topics, config) = parse_config_json::<TestConfig>(json).unwrap();
+        assert_eq!(topics["data"], "/foo/data");
+        assert_eq!(topics["confirm"], "/foo/confirm");
+        assert_eq!(config, TestConfig { value: 42, name: "hello".into() });
+    }
+
+    #[test]
+    fn missing_config_field_returns_error() {
+        let json = r#"{"topics": {"data": "/foo/data"}}"#;
+        let result = parse_config_json::<TestConfig>(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'config' field"));
+    }
+
+    #[test]
+    fn null_config_succeeds_for_unit_type() {
+        let json = r#"{"topics": {}, "config": null}"#;
+        let (_topics, config) = parse_config_json::<()>(json).unwrap();
+        assert_eq!(config, ());
+    }
+
+    #[test]
+    fn null_config_errors_when_struct_expects_fields() {
+        let json = r#"{"topics": {}, "config": null}"#;
+        let result = parse_config_json::<TestConfig>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_config_object_errors_when_struct_expects_fields() {
+        let json = r#"{"topics": {}, "config": {}}"#;
+        let result = parse_config_json::<TestConfig>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_with_wrong_type_returns_error() {
+        let json = r#"{"topics": {}, "config": {"value": "not_a_number", "name": "x"}}"#;
+        let result = parse_config_json::<TestConfig>(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("failed to deserialize config"));
+    }
+
+    #[test]
+    fn missing_topics_field_gives_empty_map() {
+        let json = r#"{"config": {"value": 1, "name": "x"}}"#;
+        let (topics, _config) = parse_config_json::<TestConfig>(json).unwrap();
+        assert!(topics.is_empty());
+    }
+
+    #[test]
+    fn malformed_json_returns_error() {
+        let result = parse_config_json::<()>("not json at all");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_config_field_returns_error() {
+        let json = r#"{"topics": {}, "config": {"value": 1, "name": "x", "unexpected": true}}"#;
+        let result = parse_config_json::<TestConfig>(json);
+        assert!(result.is_err());
+    }
+
+    // --- topic_for / map_topic ---
+
+    #[test]
+    fn unmapped_port_falls_back_to_slash_port() {
+        let module = NativeModule::new(MockTransport);
+        assert_eq!(module.topic_for("cmd_vel"), "/cmd_vel");
+    }
+
+    #[test]
+    fn map_topic_overrides_fallback() {
+        let mut module = NativeModule::new(MockTransport);
+        module.map_topic("cmd_vel", "/robot/cmd_vel");
+        assert_eq!(module.topic_for("cmd_vel"), "/robot/cmd_vel");
+    }
+
+    #[test]
+    fn input_uses_mapped_topic() {
+        let mut module = NativeModule::new(MockTransport);
+        module.map_topic("data", "/test/data");
+        let input = module.input("data", |b| Ok(b.to_vec()));
+        assert_eq!(input.topic, "/test/data");
+    }
+
+    #[test]
+    fn input_falls_back_to_slash_port_when_unmapped() {
+        let mut module = NativeModule::new(MockTransport);
+        let input = module.input("data", |b| Ok(b.to_vec()));
+        assert_eq!(input.topic, "/data");
+    }
+
+    #[test]
+    fn output_uses_mapped_topic() {
+        let mut module = NativeModule::new(MockTransport);
+        module.map_topic("cmd_vel", "/robot/cmd_vel");
+        let output = module.output("cmd_vel", |b: &Vec<u8>| b.clone());
+        assert_eq!(output.topic, "/robot/cmd_vel");
     }
 }
