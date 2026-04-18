@@ -82,7 +82,8 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Removed --cov flags so tests run faster locally without coverage overhead
-addopts = "-v"
+# -p no:warnings added to suppress noisy deprecation warnings during dev
+addopts = "-v -p no:warnings"
 
 [tool.coverage.run]
 source = ["src/dimos"]
