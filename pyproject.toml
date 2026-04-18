@@ -85,7 +85,8 @@ asyncio_mode = "auto"
 # -p no:warnings added to suppress noisy deprecation warnings during dev
 # -x added personally: stop on first failure so I can fix issues one at a time
 # --tb=short: more concise tracebacks, easier to scan when iterating quickly
-addopts = "-v -p no:warnings -x --tb=short"
+# --no-header: skip the pytest header line, slightly cleaner output
+addopts = "-v -p no:warnings -x --tb=short --no-header"
 
 [tool.coverage.run]
 source = ["src/dimos"]
