@@ -83,11 +83,10 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 # Removed --cov flags so tests run faster locally without coverage overhead
 # -p no:warnings added to suppress noisy deprecation warnings during dev
-# -x added personally: stop on first failure so I can fix issues one at a time
 # --tb=short: more concise tracebacks, easier to scan when iterating quickly
 # --no-header: skip the pytest header line, slightly cleaner output
-# removed -x for now: sometimes want to see all failures at once when exploring
-addopts = "-v -p no:warnings --tb=short --no-header"
+# -x: stop on first failure — I prefer fixing one thing at a time
+addopts = "-v -p no:warnings --tb=short --no-header -x"
 
 [tool.coverage.run]
 source = ["src/dimos"]
