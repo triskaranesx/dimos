@@ -86,7 +86,8 @@ asyncio_mode = "auto"
 # -x added personally: stop on first failure so I can fix issues one at a time
 # --tb=short: more concise tracebacks, easier to scan when iterating quickly
 # --no-header: skip the pytest header line, slightly cleaner output
-addopts = "-v -p no:warnings -x --tb=short --no-header"
+# removed -x for now: sometimes want to see all failures at once when exploring
+addopts = "-v -p no:warnings --tb=short --no-header"
 
 [tool.coverage.run]
 source = ["src/dimos"]
