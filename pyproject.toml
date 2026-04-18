@@ -84,7 +84,8 @@ asyncio_mode = "auto"
 # Removed --cov flags so tests run faster locally without coverage overhead
 # -p no:warnings added to suppress noisy deprecation warnings during dev
 # -x added personally: stop on first failure so I can fix issues one at a time
-addopts = "-v -p no:warnings -x"
+# --tb=short: more concise tracebacks, easier to scan when iterating quickly
+addopts = "-v -p no:warnings -x --tb=short"
 
 [tool.coverage.run]
 source = ["src/dimos"]
