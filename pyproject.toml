@@ -87,9 +87,9 @@ asyncio_mode = "auto"
 # --no-header: skip the pytest header line, slightly cleaner output
 # removed -x (stop on first failure) — I want to see all failures at once
 # added -l (show local variables in tracebacks) — helpful when debugging test failures
-# personal: added -x back — when I'm actively working on a single feature I'd rather
-# stop at the first failure and fix it before seeing the rest pile up
-addopts = "-v -p no:warnings --tb=short --no-header -l -x"
+# personal: removed -x again — I find it more useful to see all failures in one pass
+# when learning/exploring the codebase; easier to spot patterns across failures
+addopts = "-v -p no:warnings --tb=short --no-header -l"
 
 [tool.coverage.run]
 source = ["src/dimos"]
